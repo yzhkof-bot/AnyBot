@@ -11,6 +11,13 @@ pyautogui.PAUSE = 0.02
 # 关闭 failsafe（鼠标移到左上角不会中断程序）
 pyautogui.FAILSAFE = False
 
+# macOS Quartz 直接调用（绕过 pyautogui PAUSE，用于高频 drag_move）
+try:
+    import Quartz
+    _HAS_QUARTZ = True
+except ImportError:
+    _HAS_QUARTZ = False
+
 
 class InputController:
     """输入控制器 - 统一的鼠标键盘操控接口"""
@@ -55,30 +62,98 @@ class InputController:
         """流式拖拽 — 按下鼠标"""
         x, y = self._clamp(x, y)
         logger.debug(f"拖拽开始: ({x}, {y})")
-        pyautogui.moveTo(x, y)
-        pyautogui.mouseDown(x=x, y=y, button=button)
+        if _HAS_QUARTZ:
+            # 直接用 Quartz 先移动再按下，绕过 PAUSE
+            move_event = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventMouseMoved, (x, y), Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, move_event)
+            down_event = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventLeftMouseDown, (x, y), Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, down_event)
+        else:
+            pyautogui.moveTo(x, y, _pause=False)
+            pyautogui.mouseDown(x=x, y=y, button=button, _pause=False)
 
     def drag_move(self, x: int, y: int):
-        """流式拖拽 — 移动（不释放按键，高频调用无延迟）"""
+        """流式拖拽 — 移动（不释放按键，高频调用零延迟）
+        使用 Quartz CGEvent 直接发送鼠标移动事件，绕过 pyautogui 的全局 PAUSE
+        """
         x, y = self._clamp(x, y)
-        pyautogui.moveTo(x, y, _pause=False)
+        if _HAS_QUARTZ:
+            # 直接通过 Quartz CGEvent 移动（左键按住状态的 mouseDragged）
+            event = Quartz.CGEventCreateMouseEvent(
+                None,
+                Quartz.kCGEventLeftMouseDragged,
+                (x, y),
+                Quartz.kCGMouseButtonLeft,
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        else:
+            pyautogui.moveTo(x, y, _pause=False)
 
     def drag_end(self, x: int, y: int, button: str = "left"):
         """流式拖拽 — 释放鼠标"""
         x, y = self._clamp(x, y)
         logger.debug(f"拖拽结束: ({x}, {y})")
-        pyautogui.mouseUp(x=x, y=y, button=button)
+        if _HAS_QUARTZ:
+            event = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventLeftMouseUp, (x, y), Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+        else:
+            pyautogui.mouseUp(x=x, y=y, button=button, _pause=False)
 
     def scroll(self, x: int, y: int, direction: str = "down", amount: int = 3):
-        """滚轮"""
+        """滚轮 — 使用像素级滚动事件，兼容所有 macOS 应用
+        
+        pyautogui.scroll() 使用 kCGScrollEventUnitLine（行级别），
+        很多非编辑区域（网页、PDF、列表等）不响应行级滚动。
+        改用 Quartz CGEvent 直接发送 kCGScrollEventUnitPixel 像素级滚动。
+        """
         x, y = self._clamp(x, y)
-        clicks = amount if direction in ("up", "left") else -amount
         logger.debug(f"滚轮: ({x},{y}) direction={direction} amount={amount}")
-        pyautogui.moveTo(x, y)
-        if direction in ("up", "down"):
-            pyautogui.scroll(clicks, x, y)
+
+        if _HAS_QUARTZ:
+            # 先把鼠标移到目标位置（滚动事件作用于鼠标所在窗口）
+            move_event = Quartz.CGEventCreateMouseEvent(
+                None, Quartz.kCGEventMouseMoved, (x, y), Quartz.kCGMouseButtonLeft
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, move_event)
+
+            # 像素级滚动量：每个 amount 单位 = 40 像素（接近真实触控板手感）
+            PIXELS_PER_UNIT = 40
+
+            if direction in ("up", "down"):
+                pixel_delta = amount * PIXELS_PER_UNIT * (1 if direction == "up" else -1)
+                # 创建垂直滚动事件（wheel1 = 垂直方向）
+                scroll_event = Quartz.CGEventCreateScrollWheelEvent(
+                    None,
+                    Quartz.kCGScrollEventUnitPixel,
+                    1,  # 1 个滚轮轴（垂直）
+                    pixel_delta,
+                )
+            else:
+                pixel_delta = amount * PIXELS_PER_UNIT * (-1 if direction == "left" else 1)
+                # 创建水平滚动事件（wheel1=0, wheel2=水平方向）
+                scroll_event = Quartz.CGEventCreateScrollWheelEvent(
+                    None,
+                    Quartz.kCGScrollEventUnitPixel,
+                    2,  # 2 个滚轮轴（垂直+水平）
+                    0,  # 垂直=0
+                    pixel_delta,
+                )
+
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, scroll_event)
         else:
-            pyautogui.hscroll(clicks, x, y)
+            # 没有 Quartz 时回退到 pyautogui
+            clicks = amount if direction in ("up", "left") else -amount
+            pyautogui.moveTo(x, y)
+            if direction in ("up", "down"):
+                pyautogui.scroll(clicks, x, y)
+            else:
+                pyautogui.hscroll(clicks, x, y)
 
     def type_text(self, text: str):
         """输入文本"""

@@ -1,7 +1,7 @@
 /**
  * touch.js - 触摸与手势处理模块
  * 浏览模式：单指平移、双指缩放（围绕中心点）、双击切换缩放
- * 操作模式：单击、双击、长按右键、双指滚动
+ * 操作模式：单击、双击、长按右键、双指滚动、单指拖拽
  */
 
 function setupTouchEvents() {
@@ -19,6 +19,64 @@ function setupTouchEvents() {
     let isPinching = false;
     let lastPinchDist = 0;
     let lastPinchMid = null;
+
+    // 操作模式 - 拖拽状态
+    let isDragging = false;           // 是否正在拖拽中
+    let dragIndicator = null;         // 拖拽模式视觉指示器
+    let lastDragSendTime = 0;         // 上次发送 drag_move 的时间戳
+    const DRAG_MOVE_THRESHOLD = 8;    // 移动超过 8px 进入拖拽模式（区分点击和拖拽）
+    const DRAG_SEND_INTERVAL = 30;    // drag_move 最小发送间隔 30ms（约 33fps）
+
+    /**
+     * 显示拖拽指示器（触摸点附近的蓝色圆环）
+     */
+    function showDragIndicator(x, y) {
+        if (!dragIndicator) {
+            dragIndicator = document.createElement('div');
+            dragIndicator.className = 'drag-indicator';
+            document.body.appendChild(dragIndicator);
+        }
+        dragIndicator.style.left = x + 'px';
+        dragIndicator.style.top = y + 'px';
+        dragIndicator.style.display = 'block';
+    }
+
+    function updateDragIndicator(x, y) {
+        if (dragIndicator) {
+            dragIndicator.style.left = x + 'px';
+            dragIndicator.style.top = y + 'px';
+        }
+    }
+
+    function hideDragIndicator() {
+        if (dragIndicator) {
+            dragIndicator.style.display = 'none';
+        }
+    }
+
+    /**
+     * 进入拖拽模式：发送 drag_start 并显示指示器
+     */
+    function enterDragMode(clientX, clientY) {
+        isDragging = true;
+        lastDragSendTime = Date.now();
+        const pos = mapToScreen(clientX, clientY);
+        sendAction({ action: 'drag_start', x: pos.x, y: pos.y });
+        showDragIndicator(clientX, clientY);
+        // 震动反馈（支持的设备）
+        if (navigator.vibrate) navigator.vibrate(30);
+    }
+
+    /**
+     * 结束拖拽模式：发送 drag_end 并隐藏指示器
+     */
+    function exitDragMode(clientX, clientY) {
+        if (!isDragging) return;
+        isDragging = false;
+        const pos = mapToScreen(clientX, clientY);
+        sendAction({ action: 'drag_end', x: pos.x, y: pos.y });
+        hideDragIndicator();
+    }
 
     // ===== 工具函数 =====
     function getPinchDist(t1, t2) {
@@ -119,9 +177,11 @@ function setupTouchEvents() {
                 panStartTouch = { x: touch.clientX, y: touch.clientY };
             }
         } else {
-            // 操作模式：长按检测 → 右键
+            // 操作模式
+            // 长按 600ms 且没移动 → 右键
+            // 按住后移动超过阈值 → 进入拖拽（由 touchmove 处理）
             longPressTimer = setTimeout(() => {
-                if (!isTouchMoved) {
+                if (!isTouchMoved && !isDragging) {
                     const pos = mapToScreen(touch.clientX, touch.clientY);
                     sendAction({ action: 'right_click', x: pos.x, y: pos.y });
                     showRipple(touch.clientX, touch.clientY, '#ff9500');
@@ -186,17 +246,41 @@ function setupTouchEvents() {
         } else {
             // 操作模式
             const touch = e.touches[0];
-            if (touchStartPos) {
-                const dx = touch.clientX - touchStartPos.x;
-                const dy = touch.clientY - touchStartPos.y;
-                if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
-                    isTouchMoved = true;
-                    clearTimeout(longPressTimer);
+
+            if (e.touches.length === 1) {
+                if (isDragging) {
+                    // 拖拽中 → 节流发送 drag_move（限制频率，避免堆积）
+                    const now = Date.now();
+                    if (now - lastDragSendTime >= DRAG_SEND_INTERVAL) {
+                        lastDragSendTime = now;
+                        const pos = mapToScreen(touch.clientX, touch.clientY);
+                        sendAction({ action: 'drag_move', x: pos.x, y: pos.y });
+                    }
+                    // 指示器始终跟随（不受节流影响）
+                    updateDragIndicator(touch.clientX, touch.clientY);
+                } else if (touchStartPos) {
+                    const dx = touch.clientX - touchStartPos.x;
+                    const dy = touch.clientY - touchStartPos.y;
+                    if (Math.abs(dx) > DRAG_MOVE_THRESHOLD || Math.abs(dy) > DRAG_MOVE_THRESHOLD) {
+                        isTouchMoved = true;
+                        // 移动了 → 取消右键定时器
+                        clearTimeout(longPressTimer);
+                        // 移动超过阈值 → 进入拖拽
+                        enterDragMode(touchStartPos.x, touchStartPos.y);
+                        // 立即发一次 move 到当前位置
+                        const pos = mapToScreen(touch.clientX, touch.clientY);
+                        sendAction({ action: 'drag_move', x: pos.x, y: pos.y });
+                        updateDragIndicator(touch.clientX, touch.clientY);
+                    }
                 }
             }
             // 双指滚动
             if (e.touches.length === 2) {
                 clearTimeout(longPressTimer);
+                // 双指时结束拖拽（如果正在拖拽）
+                if (isDragging) {
+                    exitDragMode(touch.clientX, touch.clientY);
+                }
                 const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
                 if (touchStartPos && touchStartPos._lastScrollY) {
                     const deltaY = midY - touchStartPos._lastScrollY;
@@ -250,11 +334,24 @@ function setupTouchEvents() {
                         lastTapTime = now;
                     }
                 }
+
+                // 保存当前缩放位置到窗口缓存（在所有 view 修改之后）
+                if (typeof saveCurrentViewToCache === 'function') {
+                    saveCurrentViewToCache();
+                }
             }
             return;
         }
 
         // 操作模式
+        if (isDragging) {
+            // 拖拽释放
+            const lastTouch = e.changedTouches[0];
+            exitDragMode(lastTouch.clientX, lastTouch.clientY);
+            showRipple(lastTouch.clientX, lastTouch.clientY, '#007aff');
+            return;
+        }
+
         if (!touchStartPos || isTouchMoved) return;
 
         const elapsed = Date.now() - touchStartTime;

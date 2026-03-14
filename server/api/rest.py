@@ -44,6 +44,72 @@ async def get_cursor():
     return executor.input_ctrl.get_cursor_position()
 
 
+# ───────── 窗口捕获模式 ─────────
+
+@router.get("/windows")
+async def list_windows():
+    """列出所有可见窗口（供前端选择窗口捕获模式）"""
+    windows = executor.screen.list_windows()
+    return {
+        "windows": windows,
+        "current_window_id": executor.screen._window_id,
+        "pinned_ids": executor.screen.pinned_window_ids,
+    }
+
+
+@router.post("/window/select")
+async def select_window(request: dict):
+    """选择要捕获的窗口
+    
+    Body:
+        {"window_id": 12345, "window_name": "...", "window_owner": "..."}
+        或 {"window_id": null} 切回全屏模式
+    """
+    window_id = request.get("window_id")
+    window_name = request.get("window_name", "")
+    window_owner = request.get("window_owner", "")
+
+    executor.screen.set_window(window_id, window_name, window_owner)
+
+    return {
+        "success": True,
+        "mode": "window" if window_id is not None else "fullscreen",
+        "screen_info": executor.screen.screen_info,
+    }
+
+
+@router.post("/window/pin")
+async def pin_window(request: dict):
+    """置顶窗口
+    
+    Body:
+        {"window_id": 12345, "window_owner": "...", "window_name": "..."}
+    """
+    window_id = request.get("window_id")
+    if window_id is None:
+        return {"success": False, "error": "缺少 window_id"}
+    
+    owner = request.get("window_owner", "")
+    name = request.get("window_name", "")
+    result = executor.screen.pin_window(window_id, owner=owner, name=name)
+    return {"success": result, "pinned_ids": executor.screen.pinned_window_ids}
+
+
+@router.post("/window/unpin")
+async def unpin_window(request: dict):
+    """取消置顶窗口
+    
+    Body:
+        {"window_id": 12345}
+    """
+    window_id = request.get("window_id")
+    if window_id is None:
+        return {"success": False, "error": "缺少 window_id"}
+    
+    result = executor.screen.unpin_window(window_id)
+    return {"success": result, "pinned_ids": executor.screen.pinned_window_ids}
+
+
 @router.post("/action", response_model=ActionResult)
 async def execute_action(req: ActionRequest):
     """执行单个操控动作"""

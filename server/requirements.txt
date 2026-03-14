@@ -5,5 +5,6 @@ mss>=9.0.1
 Pillow>=10.0.0
 pyautogui>=0.9.54
 numpy>=1.24.0
+aiortc>=1.9.0
 pydantic>=2.0
 loguru>=0.7.0

@@ -22,6 +22,7 @@
             <span id="status-text">未连接</span>
         </div>
         <div class="status-right">
+            <span id="bw-text"></span>
             <span id="fps-text"></span>
             <button class="tool-btn" onclick="toggleFullscreenLandscape()" id="btn-fullscreen" style="height:26px;padding:0 10px;font-size:11px;">🔲 全屏</button>
         </div>
@@ -41,15 +42,46 @@
         <canvas id="screen-canvas"></canvas>
     </div>
 
+    <!-- 滚轮滑动面板 -->
+    <div id="scroll-panel">
+        <div id="scroll-track">
+            <div id="scroll-thumb"></div>
+            <div id="scroll-arrow-up">▲</div>
+            <div id="scroll-arrow-down">▼</div>
+        </div>
+    </div>
+
     <!-- 工具栏 -->
     <div id="toolbar">
         <button class="tool-btn" onclick="toggleMode()" id="btn-mode" style="background:#30d158;border-color:#30d158">👁 浏览</button>
         <button class="tool-btn" onclick="toggleKeyboard()" id="btn-keyboard">⌨️ 键盘</button>
-        <button class="tool-btn" onclick="sendKey(['command','c'])">📋 复制</button>
-        <button class="tool-btn" onclick="sendKey(['command','v'])">📌 粘贴</button>
-        <button class="tool-btn" onclick="sendKey(['command','z'])">↩️ 撤销</button>
-        <button class="tool-btn" onclick="goHome()">🏠</button>
-        <button class="tool-btn" onclick="resetZoom()" id="btn-zoom">🔍 1x</button>
+        <button class="tool-btn" onclick="toggleScrollPanel()" id="btn-scroll">🖱 滚轮</button>
+        <button class="tool-btn" onclick="showWindowPicker()" id="btn-window">🪟 窗口</button>
+        <button class="tool-btn" onclick="toggleMoreMenu()" id="btn-more">⋯ 更多</button>
+    </div>
+
+    <!-- 更多菜单 -->
+    <div id="more-menu">
+        <button class="more-menu-item" onclick="sendKey(['command','c']);hideMoreMenu()">📋 复制</button>
+        <button class="more-menu-item" onclick="sendKey(['command','v']);hideMoreMenu()">📌 粘贴</button>
+        <button class="more-menu-item" onclick="sendKey(['command','z']);hideMoreMenu()">↩️ 撤销</button>
+        <button class="more-menu-item" onclick="sendKey(['command','shift','z']);hideMoreMenu()">↪️ 重做</button>
+        <button class="more-menu-item" onclick="goHome();hideMoreMenu()">🏠 Spotlight</button>
+        <button class="more-menu-item" onclick="resetZoom();hideMoreMenu()">🔍 重置缩放</button>
+    </div>
+
+    <!-- 窗口选择弹窗 -->
+    <div id="window-picker-overlay">
+        <div id="window-picker">
+            <div id="window-picker-header">
+                <h3>选择要捕获的窗口</h3>
+                <button id="window-picker-close" onclick="hideWindowPicker()">✕</button>
+            </div>
+            <div id="window-picker-current"></div>
+            <button id="window-fullscreen-btn" onclick="selectWindow(null)">🖥 全屏模式</button>
+            <div id="window-list-loading">加载中...</div>
+            <div id="window-list"></div>
+        </div>
     </div>
 
     <!-- 虚拟键盘 -->

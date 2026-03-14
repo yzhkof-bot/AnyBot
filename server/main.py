@@ -15,6 +15,7 @@ from .core.screen import ScreenCapture
 from .core.input_control import InputController
 from .core.action_executor import ActionExecutor
 from .api import rest, websocket
+from .stream import webrtc
 
 # 日志配置
 logger.remove()
@@ -35,10 +36,12 @@ executor = ActionExecutor(screen, input_ctrl)
 # 注入到 API 模块
 rest.set_executor(executor)
 websocket.set_executor(executor)
+webrtc.set_executor(executor)
 
 # 注册路由
 app.include_router(rest.router)
 app.include_router(websocket.router)
+app.include_router(webrtc.router)
 
 # 静态文件 (手机端 Web 页面)
 web_dir = Path(__file__).parent.parent / "web"
@@ -62,6 +65,7 @@ async def health():
 
 @app.on_event("shutdown")
 async def shutdown():
+    await webrtc.close_all()
     screen.close()
     logger.info("AnyBot 服务已关闭")
 

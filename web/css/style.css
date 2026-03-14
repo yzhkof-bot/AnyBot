@@ -47,6 +47,7 @@ body {
 #status-dot.connected { background: #30d158; }
 
 #status-text { color: #999; }
+#bw-text { color: #666; }
 #fps-text { color: #666; }
 
 #status-bar .status-right {
@@ -89,6 +90,39 @@ body {
 
 .tool-btn:active { background: rgba(255,255,255,0.2); transform: scale(0.95); }
 .tool-btn.active { background: #0a84ff; border-color: #0a84ff; }
+
+/* ===== 更多菜单 ===== */
+#more-menu {
+    position: fixed;
+    bottom: 56px;
+    right: 12px;
+    background: rgba(30,30,30,0.95);
+    backdrop-filter: blur(10px);
+    border: 1px solid #444;
+    border-radius: 12px;
+    padding: 6px 0;
+    z-index: 110;
+    display: none;
+    min-width: 140px;
+}
+
+#more-menu.show { display: block; }
+
+.more-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 16px;
+    border: none;
+    background: none;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+    text-align: left;
+}
+
+.more-menu-item:active { background: rgba(255,255,255,0.1); }
 
 /* ===== 屏幕容器 ===== */
 #screen-container {
@@ -144,6 +178,27 @@ body {
 @keyframes ripple {
     0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
     100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+}
+
+/* ===== 拖拽触摸指示器 ===== */
+.drag-indicator {
+    position: fixed;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 3px solid rgba(0, 122, 255, 0.8);
+    background: rgba(0, 122, 255, 0.15);
+    pointer-events: none;
+    z-index: 200;
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 16px rgba(0, 122, 255, 0.4);
+    animation: drag-pulse 1s ease-in-out infinite;
+    display: none;
+}
+
+@keyframes drag-pulse {
+    0%, 100% { box-shadow: 0 0 12px rgba(0, 122, 255, 0.3); }
+    50% { box-shadow: 0 0 24px rgba(0, 122, 255, 0.6); }
 }
 
 /* ===== 虚拟键盘面板 ===== */
@@ -282,3 +337,314 @@ body {
 #connect-btn:disabled { background: #333; color: #666; }
 
 #connect-info { color: #666; font-size: 12px; margin-top: 12px; }
+
+/* ===== 滚轮滑动面板 ===== */
+#scroll-panel {
+    position: fixed;
+    left: 0;
+    bottom: 50px;
+    width: 52px;
+    height: 0;
+    z-index: 95;
+    transition: height 0.25s ease;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+#scroll-panel.show {
+    height: 55vh;
+    pointer-events: auto;
+}
+
+#scroll-track {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: rgba(30, 30, 30, 0.92);
+    backdrop-filter: blur(10px);
+    border-right: 1px solid #333;
+    border-top: 1px solid #333;
+    border-top-right-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 0;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+#scroll-arrow-up,
+#scroll-arrow-down {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid #444;
+    color: #aaa;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+
+#scroll-arrow-up:active,
+#scroll-arrow-down:active {
+    background: rgba(255,255,255,0.2);
+}
+
+#scroll-thumb {
+    flex: 1;
+    width: 36px;
+    margin: 8px 0;
+    border-radius: 18px;
+    background: linear-gradient(180deg, rgba(10,132,255,0.15) 0%, rgba(10,132,255,0.25) 50%, rgba(10,132,255,0.15) 100%);
+    border: 1px solid rgba(10,132,255,0.4);
+    position: relative;
+    overflow: hidden;
+}
+
+/* 滑动区域中间的装饰线 */
+#scroll-thumb::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 16px;
+    height: 2px;
+    background: rgba(10,132,255,0.5);
+    border-radius: 1px;
+    box-shadow:
+        0 -6px 0 rgba(10,132,255,0.5),
+        0 6px 0 rgba(10,132,255,0.5);
+}
+
+/* 滑动时的高亮效果 */
+#scroll-thumb.active {
+    background: linear-gradient(180deg, rgba(10,132,255,0.25) 0%, rgba(10,132,255,0.4) 50%, rgba(10,132,255,0.25) 100%);
+    border-color: rgba(10,132,255,0.7);
+}
+
+/* 滚动方向指示器 */
+#scroll-panel .scroll-dir-indicator {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 18px;
+    color: rgba(10,132,255,0.9);
+    pointer-events: none;
+    transition: opacity 0.15s;
+    opacity: 0;
+}
+
+#scroll-panel .scroll-dir-indicator.show { opacity: 1; }
+
+/* ===== 窗口选择弹窗 ===== */
+#window-picker-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 600;
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+#window-picker-overlay.show {
+    display: flex;
+}
+
+#window-picker {
+    width: 90%;
+    max-width: 400px;
+    max-height: 75vh;
+    background: #1c1c1e;
+    border-radius: 16px;
+    border: 1px solid #333;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+#window-picker-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 16px;
+    border-bottom: 1px solid #333;
+}
+
+#window-picker-header h3 {
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+
+#window-picker-close {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.1);
+    color: #999;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#window-picker-close:active { background: rgba(255,255,255,0.2); }
+
+#window-picker-current {
+    padding: 10px 16px;
+    font-size: 12px;
+    color: #888;
+    border-bottom: 1px solid #2a2a2a;
+}
+
+#window-fullscreen-btn {
+    margin: 10px 16px;
+    padding: 12px;
+    border: 1px solid #444;
+    border-radius: 10px;
+    background: rgba(48,209,88,0.1);
+    color: #30d158;
+    font-size: 14px;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.15s;
+}
+
+#window-fullscreen-btn:active { background: rgba(48,209,88,0.2); }
+#window-fullscreen-btn.current {
+    background: rgba(48,209,88,0.2);
+    border-color: #30d158;
+}
+
+#window-list-loading {
+    padding: 20px 16px;
+    text-align: center;
+    color: #666;
+    font-size: 13px;
+    display: none;
+}
+
+#window-list {
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    flex: 1;
+    padding: 0 10px 10px;
+}
+
+.window-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    margin-top: 6px;
+    border: 1px solid #2a2a2a;
+    border-radius: 10px;
+    background: rgba(255,255,255,0.03);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.window-item:active { background: rgba(255,255,255,0.08); }
+.window-item.current {
+    border-color: #0a84ff;
+    background: rgba(10,132,255,0.1);
+}
+
+.window-item-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.window-item-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.window-item-owner {
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.window-focus-tag {
+    display: inline-block;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(10,132,255,0.25);
+    color: #0a84ff;
+    font-weight: 600;
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
+.window-item-name {
+    font-size: 11px;
+    color: #888;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+}
+
+.window-item-size {
+    font-size: 10px;
+    color: #555;
+    flex-shrink: 0;
+}
+
+/* 窗口分组标题 */
+.window-group-header {
+    font-size: 11px;
+    color: #888;
+    padding: 10px 4px 4px;
+    font-weight: 500;
+    letter-spacing: 0.3px;
+}
+
+/* 置顶按钮 */
+.window-pin-btn {
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    color: #666;
+    font-size: 14px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.15s;
+}
+
+.window-pin-btn:active {
+    background: rgba(255,255,255,0.15);
+    transform: scale(0.9);
+}
+
+.window-pin-btn.pinned {
+    background: rgba(255,149,0,0.15);
+    color: #ff9500;
+}
+
+/* 置顶窗口项的特殊样式 */
+.window-item.pinned {
+    border-color: rgba(255,149,0,0.3);
+    background: rgba(255,149,0,0.05);
+}

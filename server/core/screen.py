@@ -2,12 +2,14 @@
 屏幕捕获模块 - 使用 mss 进行高性能截屏
 macOS 底层调用 Quartz API，性能优秀
 支持增量传输：检测画面变化区域，仅推送 dirty region
+支持窗口捕获模式：通过 Quartz CGWindowListCreateImage 只截取指定窗口
 """
 
 import io
 import json
 import base64
 import time
+import platform
 from typing import Optional, Tuple, List
 
 import numpy as np
@@ -16,9 +18,31 @@ import mss.tools
 from PIL import Image
 from loguru import logger
 
+# macOS 窗口捕获支持
+_HAS_QUARTZ = False
+if platform.system() == "Darwin":
+    try:
+        import Quartz
+        from Quartz import (
+            CGWindowListCopyWindowInfo,
+            CGWindowListCreateImage,
+            CGRectNull,
+            kCGWindowListOptionIncludingWindow,
+            kCGWindowImageBoundsIgnoreFraming,
+            kCGWindowImageNominalResolution,
+            kCGWindowListOptionAll,
+            kCGNullWindowID,
+        )
+        # CoreGraphics 在 pyobjc 中是 Quartz.CoreGraphics，不是独立模块
+        from Quartz import CoreGraphics
+        _HAS_QUARTZ = True
+        logger.info("Quartz 窗口捕获支持已加载")
+    except ImportError as e:
+        logger.warning(f"Quartz 不可用，窗口捕获功能不可用: {e}")
+
 
 class ScreenCapture:
-    """屏幕捕获器"""
+    """屏幕捕获器 — 支持全屏模式和窗口模式"""
 
     def __init__(self, monitor_index: int = 1, quality: int = 50, max_size: Tuple[int, int] = (1280, 800)):
         """
@@ -32,6 +56,13 @@ class ScreenCapture:
         self.max_size = max_size
         self._sct = mss.mss()
         self._screen_info = None
+        # 窗口捕获模式
+        self._window_id: Optional[int] = None       # None = 全屏模式
+        self._window_name: Optional[str] = None      # 当前捕获的窗口名
+        self._window_owner: Optional[str] = None     # 当前捕获的窗口所属应用
+        self._window_bounds: Optional[dict] = None   # 窗口在屏幕上的位置 {x, y, w, h}
+        # 置顶窗口列表 [{id, owner, name}, ...]
+        self._pinned_windows: List[dict] = []
         self._update_screen_info()
 
     def _update_screen_info(self):
@@ -47,14 +78,348 @@ class ScreenCapture:
 
     @property
     def screen_info(self) -> dict:
-        return self._screen_info.copy()
+        info = self._screen_info.copy()
+        info["window_mode"] = self._window_id is not None
+        if self._window_id is not None:
+            info["window_id"] = self._window_id
+            info["window_name"] = self._window_name
+            info["window_owner"] = self._window_owner
+        return info
 
     @property
     def screen_size(self) -> Tuple[int, int]:
         return (self._screen_info["width"], self._screen_info["height"])
 
+    # ───────── 窗口管理 ─────────
+
+    def list_windows(self) -> List[dict]:
+        """列出所有可见窗口（供前端选择）
+        
+        Quartz 的 CGWindowListCopyWindowInfo 返回的窗口天然按 Z-order 排列，
+        最前面的（当前焦点）窗口排在列表最前。
+        
+        排序规则：置顶窗口 → 焦点窗口 → 其他窗口
+        
+        Returns:
+            [{"id": 窗口ID, "owner": 应用名, "name": 窗口标题, 
+              "bounds": {x,y,w,h}, "order": 0起始序号, "pinned": bool}, ...]
+        """
+        if not _HAS_QUARTZ:
+            return []
+
+        window_list = CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )
+
+        pinned_ids = {p["id"] for p in self._pinned_windows}
+        all_windows = []
+        order = 0
+        for win in window_list:
+            # 过滤掉不可见的和太小的窗口
+            layer = win.get("kCGWindowLayer", 0)
+            alpha = win.get("kCGWindowAlpha", 0)
+            if layer != 0 or alpha < 0.1:
+                continue
+
+            bounds = win.get("kCGWindowBounds", {})
+            w = bounds.get("Width", 0)
+            h = bounds.get("Height", 0)
+            if w < 50 or h < 50:
+                continue
+
+            owner = win.get("kCGWindowOwnerName", "")
+            name = win.get("kCGWindowName", "")
+            wid = win.get("kCGWindowNumber", 0)
+
+            # 过滤掉 AnyBot 自身和系统窗口
+            if owner in ("Window Server", "SystemUIServer", "Dock"):
+                continue
+
+            all_windows.append({
+                "id": wid,
+                "owner": owner,
+                "name": name or "(无标题)",
+                "bounds": {
+                    "x": int(bounds.get("X", 0)),
+                    "y": int(bounds.get("Y", 0)),
+                    "w": int(w),
+                    "h": int(h),
+                },
+                "z_order": order,
+                "pinned": wid in pinned_ids,
+            })
+            order += 1
+
+        # 清理已不存在的置顶窗口
+        current_ids = {w["id"] for w in all_windows}
+        self._pinned_windows = [p for p in self._pinned_windows if p["id"] in current_ids]
+
+        # 排序：置顶窗口（按置顶顺序）→ 非置顶窗口（按 Z-order）
+        pinned_list = []
+        normal_list = []
+        for w in all_windows:
+            if w["pinned"]:
+                pinned_list.append(w)
+            else:
+                normal_list.append(w)
+
+        # 置顶窗口按照用户添加的顺序排列
+        pinned_order = {p["id"]: i for i, p in enumerate(self._pinned_windows)}
+        pinned_list.sort(key=lambda w: pinned_order.get(w["id"], 0))
+
+        result = pinned_list + normal_list
+        # 重新编号 order
+        for i, w in enumerate(result):
+            w["order"] = i
+
+        return result
+
+    def pin_window(self, window_id: int, owner: str = "", name: str = "") -> bool:
+        """置顶一个窗口
+        
+        Args:
+            window_id: 窗口 ID
+            owner: 应用名
+            name: 窗口标题
+            
+        Returns:
+            True 表示成功，False 表示已置顶
+        """
+        for p in self._pinned_windows:
+            if p["id"] == window_id:
+                return False  # 已置顶
+        self._pinned_windows.append({"id": window_id, "owner": owner, "name": name})
+        logger.info(f"置顶窗口: [{owner}] {name} (ID={window_id})")
+        return True
+
+    def unpin_window(self, window_id: int) -> bool:
+        """取消置顶一个窗口
+        
+        Args:
+            window_id: 窗口 ID
+            
+        Returns:
+            True 表示成功，False 表示未置顶
+        """
+        before_len = len(self._pinned_windows)
+        self._pinned_windows = [p for p in self._pinned_windows if p["id"] != window_id]
+        removed = len(self._pinned_windows) < before_len
+        if removed:
+            logger.info(f"取消置顶窗口: ID={window_id}")
+        return removed
+
+    @property
+    def pinned_window_ids(self) -> List[int]:
+        """获取所有置顶的窗口 ID 列表"""
+        return [p["id"] for p in self._pinned_windows]
+
+    def set_window(self, window_id: Optional[int], window_name: str = "", window_owner: str = ""):
+        """切换到窗口捕获模式或全屏模式
+        
+        Args:
+            window_id: 窗口ID，None 表示切回全屏模式
+            window_name: 窗口标题（记录用）
+            window_owner: 应用名（记录用）
+        """
+        if window_id is None:
+            # 切回全屏模式
+            self._window_id = None
+            self._window_name = None
+            self._window_owner = None
+            self._window_bounds = None
+            # 恢复全屏幕尺寸
+            self._update_screen_info()
+            logger.info("切换到全屏捕获模式")
+        else:
+            if not _HAS_QUARTZ:
+                logger.error("Quartz 不可用，无法切换到窗口模式")
+                return
+            self._window_id = window_id
+            self._window_name = window_name
+            self._window_owner = window_owner
+            # 获取窗口的屏幕位置 (bounds)
+            self._window_bounds = self._get_window_bounds(window_id)
+            # 捕获一帧来更新 screen_info 中的尺寸
+            try:
+                img = self._capture_window()
+                if img:
+                    self._screen_info["width"] = img.width
+                    self._screen_info["height"] = img.height
+                    logger.info(f"切换到窗口模式: [{window_owner}] {window_name} "
+                                f"(ID={window_id}, {img.width}x{img.height}, "
+                                f"bounds={self._window_bounds})")
+                else:
+                    logger.warning(f"窗口 {window_id} 捕获失败，可能已关闭")
+                    self._window_id = None
+                    self._window_bounds = None
+            except Exception as e:
+                logger.error(f"窗口模式切换失败: {e}")
+                self._window_id = None
+                self._window_bounds = None
+
+    def _get_window_bounds(self, window_id: int) -> Optional[dict]:
+        """获取指定窗口在屏幕上的位置和尺寸"""
+        if not _HAS_QUARTZ:
+            return None
+        window_list = CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )
+        for win in window_list:
+            if win.get("kCGWindowNumber", 0) == window_id:
+                bounds = win.get("kCGWindowBounds", {})
+                return {
+                    "x": int(bounds.get("X", 0)),
+                    "y": int(bounds.get("Y", 0)),
+                    "w": int(bounds.get("Width", 0)),
+                    "h": int(bounds.get("Height", 0)),
+                }
+        return None
+
+    def get_window_offset(self) -> Tuple[int, int]:
+        """获取当前窗口在屏幕上的左上角偏移坐标
+        
+        全屏模式下返回 (0, 0)
+        窗口模式下返回 (window_x, window_y)，用于将窗口内相对坐标转换为屏幕绝对坐标
+        """
+        if self._window_id is None or self._window_bounds is None:
+            return (0, 0)
+        # 每次获取时刷新窗口位置（窗口可能被拖动）
+        bounds = self._get_window_bounds(self._window_id)
+        if bounds:
+            self._window_bounds = bounds
+            return (bounds["x"], bounds["y"])
+        return (self._window_bounds["x"], self._window_bounds["y"])
+
+    def activate_window(self) -> str:
+        """将当前窗口模式的目标窗口激活到前台
+        
+        macOS 的鼠标/键盘事件会发送到屏幕绝对坐标处最前面的窗口，
+        如果目标窗口被遮挡，操作会发送到错误的窗口。
+        因此在执行操作前需要先将目标窗口提升到前台。
+        
+        优化：
+        - 检查窗口是否已在 Z-order 最前（z_order=0），已在最前则跳过
+        - 时间节流：0.5 秒内不重复激活（避免拖拽等高频操作卡顿）
+        
+        Returns:
+            "already_front" — 窗口已在前台，无需操作
+            "throttled" — 节流期内，跳过激活
+            "activated" — 刚执行了激活操作（调用方应等待 macOS 完成切换）
+            "failed" — 激活失败
+        """
+        if self._window_id is None or self._window_owner is None:
+            return "already_front"  # 全屏模式不需要激活
+        
+        if not _HAS_QUARTZ:
+            return "failed"
+
+        # 时间节流：0.5 秒内不重复激活
+        now = time.time()
+        if hasattr(self, '_last_activate_time') and (now - self._last_activate_time) < 0.5:
+            return "throttled"
+
+        try:
+            # 检查目标窗口是否已在最前面（Z-order 第一个可见窗口）
+            window_list = CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+                kCGNullWindowID,
+            )
+            for win in window_list:
+                layer = win.get("kCGWindowLayer", 0)
+                if layer != 0:
+                    continue
+                owner = win.get("kCGWindowOwnerName", "")
+                if owner in ("Window Server", "SystemUIServer", "Dock"):
+                    continue
+                # 第一个有效窗口就是当前焦点窗口
+                front_wid = win.get("kCGWindowNumber", 0)
+                if front_wid == self._window_id:
+                    # 已在最前面，不需要激活
+                    return "already_front"
+                break  # 不在最前面，需要激活
+
+            from AppKit import NSWorkspace
+            
+            # 通过应用名找到运行中的应用并激活
+            workspace = NSWorkspace.sharedWorkspace()
+            running_apps = workspace.runningApplications()
+            
+            for app in running_apps:
+                if app.localizedName() == self._window_owner:
+                    # activateWithOptions_ 会将应用的窗口提升到前台
+                    app.activateWithOptions_(
+                        1 << 1  # NSApplicationActivateIgnoringOtherApps
+                    )
+                    self._last_activate_time = now
+                    logger.info(f"激活窗口应用: {self._window_owner} (窗口 ID={self._window_id})")
+                    return "activated"
+            
+            logger.warning(f"未找到运行中的应用: {self._window_owner}")
+            return "failed"
+        except ImportError:
+            logger.warning("AppKit 不可用，无法激活窗口")
+            return "failed"
+        except Exception as e:
+            logger.error(f"激活窗口失败: {e}")
+            return "failed"
+
+    def _capture_window(self) -> Optional[Image.Image]:
+        """使用 Quartz CGWindowListCreateImage 捕获指定窗口"""
+        if not _HAS_QUARTZ or self._window_id is None:
+            return None
+
+        # CGWindowListCreateImage: 截取指定窗口的画面
+        cg_image = CGWindowListCreateImage(
+            CGRectNull,  # CGRectNull = 自动使用窗口边界
+            kCGWindowListOptionIncludingWindow,
+            self._window_id,
+            kCGWindowImageBoundsIgnoreFraming | kCGWindowImageNominalResolution,
+        )
+
+        if cg_image is None:
+            return None
+
+        # CGImage → PIL Image
+        width = CoreGraphics.CGImageGetWidth(cg_image)
+        height = CoreGraphics.CGImageGetHeight(cg_image)
+        bytes_per_row = CoreGraphics.CGImageGetBytesPerRow(cg_image)
+
+        # 获取像素数据
+        data_provider = CoreGraphics.CGImageGetDataProvider(cg_image)
+        pixel_data = CoreGraphics.CGDataProviderCopyData(data_provider)
+
+        # 创建 PIL Image (BGRA → RGB)
+        img = Image.frombuffer(
+            "RGBA",
+            (width, height),
+            pixel_data,
+            "raw",
+            "BGRA",
+            bytes_per_row,
+            1,
+        )
+        return img.convert("RGB")
+
     def capture_raw(self) -> Image.Image:
-        """捕获原始屏幕图像，返回 PIL Image"""
+        """捕获原始屏幕图像，返回 PIL Image
+        
+        窗口模式下截取指定窗口，全屏模式下截取整个屏幕
+        """
+        if self._window_id is not None:
+            img = self._capture_window()
+            if img is not None:
+                return img
+            # 窗口捕获失败（可能已关闭），自动回退全屏
+            logger.warning(f"窗口 {self._window_id} 捕获失败，回退全屏模式")
+            self._window_id = None
+            self._window_name = None
+            self._window_owner = None
+            self._window_bounds = None
+            # 恢复屏幕尺寸信息
+            self._update_screen_info()
+
         monitor = self._sct.monitors[self.monitor_index]
         sct_img = self._sct.grab(monitor)
         # mss 返回 BGRA，转为 RGB
