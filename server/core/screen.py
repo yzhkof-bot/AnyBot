@@ -9,6 +9,7 @@ import io
 import json
 import base64
 import time
+import os
 import platform
 from typing import Optional, Tuple, List
 
@@ -63,6 +64,8 @@ class ScreenCapture:
         self._window_bounds: Optional[dict] = None   # 窗口在屏幕上的位置 {x, y, w, h}
         # 置顶窗口列表 [{id, owner, name}, ...]
         self._pinned_windows: List[dict] = []
+        self._pinned_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.anybot_pinned.json')
+        self._load_pinned_windows()
         self._update_screen_info()
 
     def _update_screen_info(self):
@@ -190,6 +193,7 @@ class ScreenCapture:
             if p["id"] == window_id:
                 return False  # 已置顶
         self._pinned_windows.append({"id": window_id, "owner": owner, "name": name})
+        self._save_pinned_windows()
         logger.info(f"置顶窗口: [{owner}] {name} (ID={window_id})")
         return True
 
@@ -206,6 +210,7 @@ class ScreenCapture:
         self._pinned_windows = [p for p in self._pinned_windows if p["id"] != window_id]
         removed = len(self._pinned_windows) < before_len
         if removed:
+            self._save_pinned_windows()
             logger.info(f"取消置顶窗口: ID={window_id}")
         return removed
 
@@ -213,6 +218,30 @@ class ScreenCapture:
     def pinned_window_ids(self) -> List[int]:
         """获取所有置顶的窗口 ID 列表"""
         return [p["id"] for p in self._pinned_windows]
+
+    def _save_pinned_windows(self):
+        """将置顶窗口列表持久化到 JSON 文件"""
+        try:
+            data = []
+            for p in self._pinned_windows:
+                data.append({"id": p["id"], "owner": p.get("owner", ""), "name": p.get("name", "")})
+            with open(self._pinned_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"保存置顶窗口列表失败: {e}")
+
+    def _load_pinned_windows(self):
+        """从 JSON 文件加载置顶窗口列表"""
+        try:
+            if os.path.exists(self._pinned_file):
+                with open(self._pinned_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self._pinned_windows = data
+                    logger.info(f"已加载 {len(data)} 个置顶窗口")
+        except Exception as e:
+            logger.warning(f"加载置顶窗口列表失败: {e}")
+            self._pinned_windows = []
 
     def set_window(self, window_id: Optional[int], window_name: str = "", window_owner: str = ""):
         """切换到窗口捕获模式或全屏模式

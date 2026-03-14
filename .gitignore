@@ -8,3 +8,4 @@ build/
 .env
 *.pid
 *.log
+.anybot_pinned.json

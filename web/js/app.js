@@ -103,6 +103,9 @@ async function startConnection() {
 
         document.getElementById('connect-overlay').classList.add('hidden');
         setStatus(true, state.streamMode === 'webrtc' ? '已连接 (WebRTC)' : '已连接 (MJPEG)');
+
+        // 恢复之前保存的客户端状态
+        await restoreClientState();
     } catch (e) {
         info.textContent = `连接失败: ${e.message}`;
         btn.disabled = false;
@@ -546,6 +549,87 @@ function sendKey(keys) {
 function goHome() {
     if (state.mode !== 'control') return;
     sendKey(['command', 'space']);
+}
+
+// ===== 客户端状态持久化 (localStorage) =====
+const STORAGE_KEY = 'anybot_state';
+
+/**
+ * 保存需要持久化的客户端状态到 localStorage
+ * 包括：缩放位置缓存、当前窗口 ID、操作/浏览模式
+ */
+function saveClientState() {
+    try {
+        const data = {
+            windowViewCache: state.windowViewCache,
+            currentWindowId: state.currentWindowId,
+            mode: state.mode,
+        };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+        // localStorage 不可用或配额满，静默忽略
+    }
+}
+
+/**
+ * 从 localStorage 恢复客户端状态
+ * 在连接建立后调用，恢复缩放位置和窗口选择
+ */
+function loadClientState() {
+    try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw);
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * 连接建立后，恢复之前保存的客户端状态
+ * 1. 恢复窗口缩放位置缓存
+ * 2. 恢复之前选中的窗口（通过服务端 API 重新选择）
+ * 3. 恢复操作/浏览模式
+ */
+async function restoreClientState() {
+    const saved = loadClientState();
+    if (!saved) return;
+
+    // 1. 恢复缩放位置缓存
+    if (saved.windowViewCache && typeof saved.windowViewCache === 'object') {
+        state.windowViewCache = saved.windowViewCache;
+    }
+
+    // 2. 恢复之前选中的窗口
+    if (saved.currentWindowId !== null && saved.currentWindowId !== undefined) {
+        try {
+            // 先查询服务端当前的窗口列表，确认窗口还存在
+            const resp = await fetch('/api/windows');
+            const data = await resp.json();
+            const windows = data.windows || [];
+            const targetWin = windows.find(w => w.id === saved.currentWindowId);
+
+            if (targetWin) {
+                // 窗口仍然存在，重新选择它
+                await selectWindow(targetWin.id, targetWin.name, targetWin.owner);
+                console.log(`[AnyBot] 已恢复窗口: [${targetWin.owner}] ${targetWin.name}`);
+            } else {
+                // 窗口已不存在，尝试通过 owner+name 匹配找到类似的窗口
+                console.log('[AnyBot] 之前的窗口已不存在，使用全屏模式');
+            }
+        } catch (e) {
+            console.warn('[AnyBot] 恢复窗口状态失败:', e);
+        }
+    }
+
+    // 3. 恢复缩放位置（根据当前窗口 ID）
+    restoreViewFromCache(state.currentWindowId);
+
+    // 4. 恢复操作/浏览模式
+    if (saved.mode === 'control' || saved.mode === 'browse') {
+        state.mode = saved.mode;
+        updateModeUI();
+    }
 }
 
 // ===== 启动 =====

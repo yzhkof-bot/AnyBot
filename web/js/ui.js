@@ -11,6 +11,8 @@ function toggleMode() {
         state.mode = 'browse';
     }
     updateModeUI();
+    // 持久化模式状态
+    if (typeof saveClientState === 'function') saveClientState();
 }
 
 function updateModeUI() {
@@ -321,11 +323,13 @@ function setupScrollPanel() {
 // ===== 窗口选择弹窗 =====
 
 /**
- * 保存当前窗口/全屏的缩放位置到 cache
+ * 保存当前窗口/全屏的缩放位置到 cache，同时持久化到 localStorage
  */
 function saveCurrentViewToCache() {
     const key = state.currentWindowId !== null ? state.currentWindowId : '__fullscreen__';
     state.windowViewCache[key] = { ...state.view };
+    // 持久化到 localStorage
+    if (typeof saveClientState === 'function') saveClientState();
 }
 
 /**
@@ -571,6 +575,9 @@ async function selectWindow(windowId, windowName, windowOwner) {
             indicator.style.opacity = '1';
             clearTimeout(indicator._fadeTimer);
             indicator._fadeTimer = setTimeout(() => { indicator.style.opacity = '0'; }, 2000);
+
+            // 7. 持久化状态到 localStorage
+            if (typeof saveClientState === 'function') saveClientState();
         }
     } catch (e) {
         console.error('切换窗口失败:', e);
