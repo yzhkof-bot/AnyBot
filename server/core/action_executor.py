@@ -65,11 +65,36 @@ class ActionExecutor:
         窗口模式下，前端坐标是相对于窗口左上角的，
         需要加上窗口在屏幕上的偏移量。
         全屏模式下直接返回原坐标。
+        
+        额外处理：窗口可能部分超出屏幕（例如被用户拖到屏幕边缘外），
+        此时计算出的绝对坐标可能为负数或超出屏幕分辨率。
+        macOS 对屏幕外坐标的鼠标事件行为不可预测，
+        因此将坐标裁剪（clamp）到屏幕可见范围 [0, screen_w/h) 内。
         """
         offset_x, offset_y = self.screen.get_window_offset()
         abs_x, abs_y = x + offset_x, y + offset_y
+        
+        # 获取物理屏幕尺寸用于裁剪（不是窗口截图尺寸）
+        screen_w, screen_h = self.screen.physical_screen_size
+        clamped = False
+        if abs_x < 0:
+            abs_x = 0
+            clamped = True
+        elif abs_x >= screen_w:
+            abs_x = screen_w - 1
+            clamped = True
+        if abs_y < 0:
+            abs_y = 0
+            clamped = True
+        elif abs_y >= screen_h:
+            abs_y = screen_h - 1
+            clamped = True
+        
         if offset_x != 0 or offset_y != 0:
-            logger.debug(f"坐标映射: ({x},{y}) + offset({offset_x},{offset_y}) → ({abs_x},{abs_y})")
+            msg = f"坐标映射: ({x},{y}) + offset({offset_x},{offset_y}) → ({abs_x},{abs_y})"
+            if clamped:
+                msg += " [已裁剪到屏幕范围]"
+            logger.debug(msg)
         return (abs_x, abs_y)
 
     def _ensure_window_active(self):
@@ -79,15 +104,26 @@ class ActionExecutor:
         如果用户选择了一个后台窗口，操作会发送到错误的窗口。
         在执行操控动作前调用此方法将目标窗口提升到前台。
         
-        注意：activateWithOptions_ 是异步的，需要一小段延迟等待 macOS 完成
-        窗口激活。否则紧接着的鼠标/键盘事件可能发送到旧的前台窗口。
+        策略：
+        1. 调用 activate_window() 激活目标窗口
+        2. 如果刚执行了激活操作，轮询验证窗口确实到达 Z-order 最前
+        3. 如果被节流跳过，短暂等待即可（上次激活尚在生效）
         """
         if self.screen._window_id is not None:
             result = self.screen.activate_window()
             if result == "activated":
-                # 刚执行了激活操作，等待 macOS 完成窗口 Z-order 切换
+                # 刚执行了激活操作，轮询验证窗口到达前台
                 import time
-                time.sleep(0.08)  # 80ms 等待窗口前台切换完成
+                for _ in range(6):  # 最多等 6 × 30ms = 180ms
+                    time.sleep(0.03)
+                    if self.screen._is_window_front():
+                        break
+                else:
+                    logger.warning(f"窗口 {self.screen._window_id} 激活后仍未到达前台")
+            elif result == "throttled":
+                # 节流跳过了激活操作，短暂等待上次激活生效
+                import time
+                time.sleep(0.03)
 
     def execute(self, req: ActionRequest) -> ActionResult:
         """执行一个操控动作"""
@@ -116,6 +152,11 @@ class ActionExecutor:
 
             elif req.action == ActionType.RIGHT_CLICK:
                 ax, ay = self._map_coords(req.x, req.y)
+                # 右键操作容易出问题（菜单可能显示在错误窗口），加详细日志
+                if self.screen._window_id is not None:
+                    bounds = self.screen._window_bounds
+                    logger.info(f"右键点击: 窗口内({req.x},{req.y}) → 屏幕({ax},{ay}), "
+                               f"窗口bounds={bounds}")
                 self.input_ctrl.click(ax, ay, button="right", click_type="single")
                 return ActionResult(action="right_click", data={"x": req.x, "y": req.y})
 

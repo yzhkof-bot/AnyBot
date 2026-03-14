@@ -41,6 +41,24 @@ if platform.system() == "Darwin":
     except ImportError as e:
         logger.warning(f"Quartz 不可用，窗口捕获功能不可用: {e}")
 
+# AXUIElement API（Accessibility）在 ApplicationServices / HIServices 中，不在 Quartz 中
+_HAS_AX = False
+if platform.system() == "Darwin":
+    try:
+        from ApplicationServices import (
+            AXUIElementCreateApplication,
+            AXUIElementCopyAttributeValue,
+            AXUIElementPerformAction,
+            AXUIElementSetAttributeValue,
+            AXValueGetValue,
+            kAXValueCGPointType,
+            kAXValueCGSizeType,
+        )
+        _HAS_AX = True
+        logger.info("AXUIElement (Accessibility) API 已加载")
+    except ImportError as e:
+        logger.warning(f"ApplicationServices 不可用，窗口焦点切换功能受限: {e}")
+
 
 class ScreenCapture:
     """屏幕捕获器 — 支持全屏模式和窗口模式"""
@@ -93,6 +111,16 @@ class ScreenCapture:
     def screen_size(self) -> Tuple[int, int]:
         return (self._screen_info["width"], self._screen_info["height"])
 
+    @property
+    def physical_screen_size(self) -> Tuple[int, int]:
+        """获取物理屏幕分辨率（不受窗口模式影响）
+        
+        screen_size 在窗口模式下会变成窗口截图的尺寸，
+        但坐标裁剪、超出屏幕判断等需要用真实的屏幕物理分辨率。
+        """
+        monitor = self._sct.monitors[self.monitor_index]
+        return (monitor["width"], monitor["height"])
+
     # ───────── 窗口管理 ─────────
 
     def list_windows(self) -> List[dict]:
@@ -105,7 +133,7 @@ class ScreenCapture:
         
         Returns:
             [{"id": 窗口ID, "owner": 应用名, "name": 窗口标题, 
-              "bounds": {x,y,w,h}, "order": 0起始序号, "pinned": bool}, ...]
+              "bounds": {x,y,w,h}, "offscreen": bool, "order": 0起始序号, "pinned": bool}, ...]
         """
         if not _HAS_QUARTZ:
             return []
@@ -114,6 +142,9 @@ class ScreenCapture:
             Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
             kCGNullWindowID,
         )
+
+        screen_w = self._screen_info["width"]
+        screen_h = self._screen_info["height"]
 
         pinned_ids = {p["id"] for p in self._pinned_windows}
         all_windows = []
@@ -139,16 +170,24 @@ class ScreenCapture:
             if owner in ("Window Server", "SystemUIServer", "Dock"):
                 continue
 
+            bx = int(bounds.get("X", 0))
+            by = int(bounds.get("Y", 0))
+            bw = int(w)
+            bh = int(h)
+            # 检测窗口是否有部分超出屏幕
+            offscreen = (bx < 0 or by < 0 or bx + bw > screen_w or by + bh > screen_h)
+
             all_windows.append({
                 "id": wid,
                 "owner": owner,
                 "name": name or "(无标题)",
                 "bounds": {
-                    "x": int(bounds.get("X", 0)),
-                    "y": int(bounds.get("Y", 0)),
-                    "w": int(w),
-                    "h": int(h),
+                    "x": bx,
+                    "y": by,
+                    "w": bw,
+                    "h": bh,
                 },
+                "offscreen": offscreen,
                 "z_order": order,
                 "pinned": wid in pinned_ids,
             })
@@ -269,6 +308,11 @@ class ScreenCapture:
             self._window_owner = window_owner
             # 获取窗口的屏幕位置 (bounds)
             self._window_bounds = self._get_window_bounds(window_id)
+            # 切换窗口时立即激活目标窗口到前台
+            # 重置节流时间，确保 activate_window 一定执行
+            self._last_activate_time = 0
+            activate_result = self.activate_window()
+            logger.info(f"切换窗口时激活: {activate_result}")
             # 捕获一帧来更新 screen_info 中的尺寸
             try:
                 img = self._capture_window()
@@ -321,6 +365,31 @@ class ScreenCapture:
             return (bounds["x"], bounds["y"])
         return (self._window_bounds["x"], self._window_bounds["y"])
 
+    def _is_window_front(self) -> bool:
+        """检查当前目标窗口是否在 Z-order 最前面"""
+        if self._window_id is None:
+            return True  # 全屏模式不需要检查
+        if not _HAS_QUARTZ:
+            return True
+
+        try:
+            window_list = CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+                kCGNullWindowID,
+            )
+            for win in window_list:
+                layer = win.get("kCGWindowLayer", 0)
+                if layer != 0:
+                    continue
+                owner = win.get("kCGWindowOwnerName", "")
+                if owner in ("Window Server", "SystemUIServer", "Dock"):
+                    continue
+                # 第一个有效窗口就是当前焦点窗口
+                return win.get("kCGWindowNumber", 0) == self._window_id
+        except Exception:
+            pass
+        return False
+
     def activate_window(self) -> str:
         """将当前窗口模式的目标窗口激活到前台
         
@@ -328,9 +397,16 @@ class ScreenCapture:
         如果目标窗口被遮挡，操作会发送到错误的窗口。
         因此在执行操作前需要先将目标窗口提升到前台。
         
+        实现策略（针对同应用多窗口焦点切换问题）：
+        1. 先通过 NSWorkspace 激活目标应用
+        2. 等待应用激活完成（关键！否则后续 AXRaise 会被覆盖）
+        3. 通过 AXUIElement 执行 AXRaise 提升目标窗口
+        4. 设置 AXMain=True 让目标窗口成为应用的 key window
+        
         优化：
-        - 检查窗口是否已在 Z-order 最前（z_order=0），已在最前则跳过
-        - 时间节流：0.5 秒内不重复激活（避免拖拽等高频操作卡顿）
+        - 检查窗口是否已在 Z-order 最前，已在最前则跳过
+        - 时间节流：0.3 秒内不重复激活（避免拖拽等高频操作卡顿）
+        - 先检查前台状态再检查节流，避免窗口被抢焦点后因节流跳过激活
         
         Returns:
             "already_front" — 窗口已在前台，无需操作
@@ -344,55 +420,267 @@ class ScreenCapture:
         if not _HAS_QUARTZ:
             return "failed"
 
-        # 时间节流：0.5 秒内不重复激活
-        now = time.time()
-        if hasattr(self, '_last_activate_time') and (now - self._last_activate_time) < 0.5:
-            return "throttled"
-
         try:
-            # 检查目标窗口是否已在最前面（Z-order 第一个可见窗口）
-            window_list = CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-                kCGNullWindowID,
-            )
-            for win in window_list:
-                layer = win.get("kCGWindowLayer", 0)
-                if layer != 0:
-                    continue
-                owner = win.get("kCGWindowOwnerName", "")
-                if owner in ("Window Server", "SystemUIServer", "Dock"):
-                    continue
-                # 第一个有效窗口就是当前焦点窗口
-                front_wid = win.get("kCGWindowNumber", 0)
-                if front_wid == self._window_id:
-                    # 已在最前面，不需要激活
-                    return "already_front"
-                break  # 不在最前面，需要激活
+            # 检查目标窗口是否已在最前面
+            if self._is_window_front():
+                return "already_front"
 
-            from AppKit import NSWorkspace
+            # 时间节流：0.3 秒内不重复激活
+            now = time.time()
+            if hasattr(self, '_last_activate_time') and (now - self._last_activate_time) < 0.3:
+                return "throttled"
+
+            from AppKit import NSWorkspace, NSRunningApplication
             
-            # 通过应用名找到运行中的应用并激活
+            # Step 1: 激活目标应用（将应用提到前台）
             workspace = NSWorkspace.sharedWorkspace()
             running_apps = workspace.runningApplications()
+            target_app = None
+            target_pid = None
             
             for app in running_apps:
                 if app.localizedName() == self._window_owner:
-                    # activateWithOptions_ 会将应用的窗口提升到前台
+                    target_app = app
+                    target_pid = app.processIdentifier()
                     app.activateWithOptions_(
                         1 << 1  # NSApplicationActivateIgnoringOtherApps
                     )
-                    self._last_activate_time = now
-                    logger.info(f"激活窗口应用: {self._window_owner} (窗口 ID={self._window_id})")
-                    return "activated"
+                    break
             
-            logger.warning(f"未找到运行中的应用: {self._window_owner}")
-            return "failed"
+            if target_app is None:
+                logger.warning(f"未找到运行中的应用: {self._window_owner}")
+                return "failed"
+
+            # Step 2: 等待应用激活完成
+            # 这是关键！activateWithOptions_ 是异步的，如果不等就做 AXRaise，
+            # macOS 完成激活后会把应用的 key window 提到前面，覆盖 AXRaise 的效果。
+            # 特别是同应用多窗口场景：macOS 激活应用时会把上一个 key window 提前。
+            time.sleep(0.05)  # 50ms 等待应用激活完成
+
+            # Step 3: 通过 AXUIElement 精确激活指定窗口
+            # AXRaise + AXMain 双管齐下，解决同应用多窗口焦点切换问题
+            raised = self._raise_window_by_ax(target_pid)
+            
+            self._last_activate_time = time.time()  # 用实际时间（含 sleep）
+            if raised:
+                logger.info(f"激活窗口: [{self._window_owner}] {self._window_name} "
+                           f"(ID={self._window_id}, AXRaise+AXMain 成功)")
+            else:
+                logger.info(f"激活应用: {self._window_owner} (AXRaise 未匹配，回退应用级激活)")
+            return "activated"
+
         except ImportError:
             logger.warning("AppKit 不可用，无法激活窗口")
             return "failed"
         except Exception as e:
             logger.error(f"激活窗口失败: {e}")
             return "failed"
+
+    def _raise_window_by_ax(self, pid: int) -> bool:
+        """通过 Accessibility API (AXUIElement) 精确提升指定窗口到前台
+        
+        遍历目标应用的所有 AX 窗口，通过对比窗口位置/尺寸来匹配
+        CGWindowID 对应的窗口，然后执行：
+        1. AXRaise —— 将窗口提升到 Z-order 最前
+        2. 设置 AXMain=True —— 将窗口设为应用的 main window（key window）
+        3. 设置 AXFocused=True —— 确保窗口获得键盘焦点
+        
+        这三步缺一不可：
+        - 只做 AXRaise：窗口到了前面但不是 key window，macOS 可能重新调整
+        - 只设 AXMain：窗口成为 key window 但 Z-order 可能不对
+        - 三者结合：确保窗口既在最前面又是 key window
+        
+        匹配策略（针对同应用多窗口场景，如多个终端窗口）：
+        1. 优先「位置+尺寸」精确匹配（最可靠，因为同应用多窗口标题可能完全相同）
+        2. 如果位置匹配失败，才回退到「标题+尺寸」匹配
+        
+        Args:
+            pid: 目标应用的进程 ID
+            
+        Returns:
+            True 表示成功 raise 了目标窗口，False 表示未找到匹配窗口
+        """
+        if not _HAS_AX:
+            logger.warning("AXUIElement API 不可用，无法精确切换窗口焦点")
+            return False
+
+        try:
+            # 获取目标窗口的 CGWindow 信息（标题 + bounds）用于匹配
+            target_info = None
+            window_list = CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+                kCGNullWindowID,
+            )
+            for win in window_list:
+                if win.get("kCGWindowNumber", 0) == self._window_id:
+                    bounds = win.get("kCGWindowBounds", {})
+                    target_info = {
+                        "name": win.get("kCGWindowName", ""),
+                        "x": int(bounds.get("X", 0)),
+                        "y": int(bounds.get("Y", 0)),
+                        "w": int(bounds.get("Width", 0)),
+                        "h": int(bounds.get("Height", 0)),
+                    }
+                    break
+            
+            if target_info is None:
+                logger.warning(f"AXRaise: CGWindow 中未找到窗口 ID={self._window_id}")
+                return False
+
+            logger.debug(f"AXRaise 目标: ID={self._window_id} title='{target_info['name']}' "
+                        f"pos=({target_info['x']},{target_info['y']}) "
+                        f"size=({target_info['w']}x{target_info['h']})")
+
+            # 创建应用级 AXUIElement（使用 ApplicationServices 的 API）
+            app_ref = AXUIElementCreateApplication(pid)
+            
+            # 获取应用的所有窗口
+            err, ax_windows = AXUIElementCopyAttributeValue(
+                app_ref, "AXWindows", None
+            )
+            if err != 0 or ax_windows is None:
+                logger.warning(f"AXRaise: 无法获取应用窗口列表, AX err={err}")
+                return False
+
+            logger.debug(f"AXRaise: 应用 PID={pid} 共有 {len(ax_windows)} 个 AX 窗口")
+
+            # 收集所有 AX 窗口信息，用于匹配和日志
+            ax_win_infos = []
+            for ax_win in ax_windows:
+                # 获取 AX 窗口标题
+                err, ax_title = AXUIElementCopyAttributeValue(
+                    ax_win, "AXTitle", None
+                )
+                ax_title = ax_title if err == 0 and ax_title else ""
+
+                # 获取 AX 窗口位置
+                err, ax_pos = AXUIElementCopyAttributeValue(
+                    ax_win, "AXPosition", None
+                )
+                # 获取 AX 窗口尺寸
+                err2, ax_size = AXUIElementCopyAttributeValue(
+                    ax_win, "AXSize", None
+                )
+
+                ax_x = ax_y = ax_w = ax_h = 0
+                if err == 0 and ax_pos is not None:
+                    pos_val = AXValueGetValue(ax_pos, kAXValueCGPointType, None)
+                    if pos_val:
+                        ax_x, ax_y = int(pos_val[1].x), int(pos_val[1].y)
+                if err2 == 0 and ax_size is not None:
+                    size_val = AXValueGetValue(ax_size, kAXValueCGSizeType, None)
+                    if size_val:
+                        ax_w, ax_h = int(size_val[1].width), int(size_val[1].height)
+
+                ax_win_infos.append({
+                    "ref": ax_win,
+                    "title": ax_title,
+                    "x": ax_x, "y": ax_y,
+                    "w": ax_w, "h": ax_h,
+                })
+                logger.debug(f"  AX窗口: title='{ax_title}' pos=({ax_x},{ax_y}) size=({ax_w}x{ax_h})")
+
+            # 匹配并激活目标窗口
+            matched_win = self._match_ax_window(ax_win_infos, target_info)
+            if matched_win is not None:
+                self._activate_ax_window(matched_win, app_ref)
+                return True
+
+            logger.warning(f"AXRaise: 所有匹配策略均未命中")
+            return False
+        except Exception as e:
+            logger.error(f"AXRaise 异常: {e}")
+            return False
+
+    def _match_ax_window(self, ax_win_infos: list, target_info: dict) -> Optional[dict]:
+        """从 AX 窗口列表中匹配目标窗口
+        
+        匹配策略优先级（核心原则：标题优先，位置辅助）：
+        1. 标题+位置+尺寸 全匹配（最可靠，唯一标识窗口）
+        2. 标题+尺寸 匹配（窗口可能被拖动过，位置变化）
+        3. 仅标题 匹配（窗口可能被缩放过）
+        4. 位置+尺寸 匹配（窗口标题为空或 AX 标题与 CG 标题不一致时回退）
+        
+        注意：不能把「位置+尺寸」放在最高优先级！
+        因为同一应用的多个最大化窗口拥有完全相同的位置和尺寸，
+        此时「位置+尺寸」会总是命中 AX 列表中的第一个窗口（通常是错误的那个）。
+        标题才是区分同应用不同窗口的关键字段。
+        """
+        TOLERANCE = 10  # 像素容差
+
+        # Pass 1: 标题+位置+尺寸 全匹配（最精确）
+        if target_info["name"]:
+            for info in ax_win_infos:
+                if (info["title"] == target_info["name"] and
+                    abs(info["x"] - target_info["x"]) <= TOLERANCE and
+                    abs(info["y"] - target_info["y"]) <= TOLERANCE and
+                    abs(info["w"] - target_info["w"]) <= TOLERANCE and
+                    abs(info["h"] - target_info["h"]) <= TOLERANCE):
+                    logger.debug(f"AX匹配(标题+位置+尺寸): title='{info['title']}' pos=({info['x']},{info['y']})")
+                    return info
+
+        # Pass 2: 标题+尺寸匹配（位置可能有变化）
+        if target_info["name"]:
+            for info in ax_win_infos:
+                if (info["title"] == target_info["name"] and
+                    abs(info["w"] - target_info["w"]) <= TOLERANCE and
+                    abs(info["h"] - target_info["h"]) <= TOLERANCE):
+                    logger.debug(f"AX匹配(标题+尺寸): title='{info['title']}'")
+                    return info
+
+        # Pass 3: 仅标题匹配（窗口可能被缩放过）
+        if target_info["name"]:
+            for info in ax_win_infos:
+                if info["title"] == target_info["name"]:
+                    logger.debug(f"AX匹配(仅标题): title='{info['title']}'")
+                    return info
+
+        # Pass 4: 位置+尺寸匹配（回退方案，标题为空或 AX/CG 标题不一致时）
+        # 注意：同应用多个最大化窗口可能位置尺寸完全相同，此策略可能误匹配
+        for info in ax_win_infos:
+            if (abs(info["x"] - target_info["x"]) <= TOLERANCE and
+                abs(info["y"] - target_info["y"]) <= TOLERANCE and
+                abs(info["w"] - target_info["w"]) <= TOLERANCE and
+                abs(info["h"] - target_info["h"]) <= TOLERANCE):
+                logger.debug(f"AX匹配(位置+尺寸,回退): title='{info['title']}' pos=({info['x']},{info['y']})")
+                return info
+
+        return None
+
+    def _activate_ax_window(self, win_info: dict, app_ref) -> None:
+        """对匹配到的 AX 窗口执行完整的激活操作
+        
+        三步激活确保窗口获得焦点：
+        1. AXRaise — 提升 Z-order
+        2. AXMain=True — 设为应用的 main window
+        3. AXFocused=True — 设为应用的 focused window
+        """
+        ax_win = win_info["ref"]
+
+        # Step 1: AXRaise — 提升到 Z-order 最前
+        err = AXUIElementPerformAction(ax_win, "AXRaise")
+        logger.debug(f"AXRaise: err={err}")
+
+        # Step 2: 设置为 main window（key window）
+        # 这是关键！没有这一步，macOS 可能在激活动画完成后把原来的 key window 拉回前台
+        try:
+            from CoreFoundation import kCFBooleanTrue
+            err2 = AXUIElementSetAttributeValue(ax_win, "AXMain", kCFBooleanTrue)
+            logger.debug(f"AXMain=True: err={err2}")
+        except Exception as e:
+            logger.debug(f"设置 AXMain 失败（可忽略）: {e}")
+
+        # Step 3: 设置 focused window
+        try:
+            from CoreFoundation import kCFBooleanTrue
+            # 设置应用级别的 AXFocusedWindow 属性指向目标窗口
+            err3 = AXUIElementSetAttributeValue(app_ref, "AXFocusedWindow", ax_win)
+            logger.debug(f"AXFocusedWindow: err={err3}")
+        except Exception as e:
+            logger.debug(f"设置 AXFocusedWindow 失败（可忽略）: {e}")
+
+        logger.info(f"窗口激活完成: title='{win_info['title']}' "
+                   f"pos=({win_info['x']},{win_info['y']})")
 
     def _capture_window(self) -> Optional[Image.Image]:
         """使用 Quartz CGWindowListCreateImage 捕获指定窗口"""

@@ -42,20 +42,11 @@
         <canvas id="screen-canvas"></canvas>
     </div>
 
-    <!-- 滚轮滑动面板 -->
-    <div id="scroll-panel">
-        <div id="scroll-track">
-            <div id="scroll-thumb"></div>
-            <div id="scroll-arrow-up">▲</div>
-            <div id="scroll-arrow-down">▼</div>
-        </div>
-    </div>
-
     <!-- 工具栏 -->
     <div id="toolbar">
         <button class="tool-btn" onclick="toggleMode()" id="btn-mode" style="background:#30d158;border-color:#30d158">👁 浏览</button>
         <button class="tool-btn" onclick="toggleKeyboard()" id="btn-keyboard">⌨️ 键盘</button>
-        <button class="tool-btn" onclick="toggleScrollPanel()" id="btn-scroll">🖱 滚轮</button>
+        <button class="tool-btn" onclick="toggleScrollMode()" id="btn-scroll">🖱 滚轮</button>
         <button class="tool-btn" onclick="showWindowPicker()" id="btn-window">🪟 窗口</button>
         <button class="tool-btn" onclick="toggleMoreMenu()" id="btn-more">⋯ 更多</button>
     </div>

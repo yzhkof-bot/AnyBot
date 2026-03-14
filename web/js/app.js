@@ -38,11 +38,14 @@ const state = {
     keyboardOpen: false,
     // 模式: 'browse' | 'control'
     mode: 'browse',
+    // 滚轮模式（独立开关，优先于 browse/control）
+    scrollMode: false,
     // 浏览模式的变换状态
     view: { scale: 1, translateX: 0, translateY: 0 },
     // 窗口模式
     currentWindowId: null,          // 当前选中的窗口 ID（null=全屏）
     windowViewCache: {},            // 每个窗口/全屏的缩放位置记忆: { windowId: {scale, translateX, translateY} }
+    windowSwitching: false,         // 窗口切换过渡中（等待视频帧更新，期间禁止操控）
     // 渲染循环标志
     _renderLoopRunning: false,
     // 统计
@@ -68,7 +71,6 @@ function init() {
 
     setupTouchEvents();
     setupKeyboardInput();
-    setupScrollPanel();
 }
 
 // ===== 连接入口 =====
@@ -284,6 +286,12 @@ function startVideoRenderLoop() {
             state.imageWidth = vw;
             state.imageHeight = vh;
             updateCanvasSize();
+
+            // 视频帧尺寸变化 → 新窗口画面已到达，解除切换锁定
+            if (state.windowSwitching) {
+                state.windowSwitching = false;
+                console.log(`[AnyBot] 视频帧已更新为 ${vw}x${vh}，窗口切换完成`);
+            }
         }
 
         // video → canvas
@@ -397,6 +405,12 @@ function handleFullFrame(blob) {
             state.imageWidth = img.width;
             state.imageHeight = img.height;
             updateCanvasSize();
+
+            // 帧尺寸变化 → 新窗口画面已到达，解除切换锁定
+            if (state.windowSwitching) {
+                state.windowSwitching = false;
+                console.log(`[AnyBot] MJPEG 帧已更新为 ${img.width}x${img.height}，窗口切换完成`);
+            }
         }
         state.ctx.drawImage(img, 0, 0);
         URL.revokeObjectURL(objectUrl);
@@ -514,9 +528,28 @@ function mapToScreen(touchX, touchY) {
     const rect = state.canvas.getBoundingClientRect();
     const relX = (touchX - rect.left) / rect.width;
     const relY = (touchY - rect.top) / rect.height;
+
+    // 窗口模式下使用 imageWidth/imageHeight（和视频帧同步）来映射。
+    // 原因：切换窗口时 selectWindow() 会立即更新 screenWidth/Height 为
+    // 新窗口尺寸，但 WebRTC 视频帧需要时间更新，canvas 上仍显示旧画面。
+    // 如果新旧窗口尺寸不同（如两个不同大小的终端窗口），坐标映射就会错乱。
+    // imageWidth/imageHeight 始终与 canvas 显示内容保持同步，避免了此问题。
+    //
+    // 全屏模式下仍用 screenWidth/screenHeight（逻辑像素），因为全屏时
+    // 视频帧尺寸可能被 thumbnail 缩放（如 Retina 屏 2880→1920），
+    // 和 CGEvent 所需的逻辑像素坐标不一致。
+    let mapW, mapH;
+    if (state.currentWindowId !== null && state.imageWidth > 0) {
+        mapW = state.imageWidth;
+        mapH = state.imageHeight;
+    } else {
+        mapW = state.screenWidth;
+        mapH = state.screenHeight;
+    }
+
     return {
-        x: Math.round(relX * state.screenWidth),
-        y: Math.round(relY * state.screenHeight),
+        x: Math.round(relX * mapW),
+        y: Math.round(relY * mapH),
     };
 }
 
@@ -525,8 +558,16 @@ function mapToScreen(touchX, touchY) {
  * 统一发送控制指令
  * WebRTC 模式 → DataChannel (延迟更低)
  * MJPEG 模式 → WebSocket
+ *
+ * 窗口切换过渡期间，操控指令被静默丢弃（防止坐标错乱）
  */
 function sendAction(action) {
+    // 窗口切换过渡期：新画面尚未到达，坐标映射不可靠
+    if (state.windowSwitching) {
+        console.log('[AnyBot] 窗口切换中，丢弃操控指令:', action.action);
+        return;
+    }
+
     const msg = JSON.stringify(action);
 
     // 优先使用 DataChannel
@@ -564,6 +605,7 @@ function saveClientState() {
             windowViewCache: state.windowViewCache,
             currentWindowId: state.currentWindowId,
             mode: state.mode,
+            scrollMode: state.scrollMode,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (e) {
@@ -629,6 +671,12 @@ async function restoreClientState() {
     if (saved.mode === 'control' || saved.mode === 'browse') {
         state.mode = saved.mode;
         updateModeUI();
+    }
+
+    // 5. 恢复滚轮模式
+    if (saved.scrollMode) {
+        state.scrollMode = true;
+        updateScrollModeUI();
     }
 }
 

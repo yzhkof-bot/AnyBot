@@ -181,143 +181,30 @@ function onFullscreenChange() {
     setTimeout(updateCanvasSize, 100);
 }
 
-// ===== 滚轮面板 =====
-let scrollPanelOpen = false;
-
-function toggleScrollPanel() {
-    scrollPanelOpen = !scrollPanelOpen;
-    const panel = document.getElementById('scroll-panel');
-    const btn = document.getElementById('btn-scroll');
-    panel.classList.toggle('show', scrollPanelOpen);
-    btn.classList.toggle('active', scrollPanelOpen);
+// ===== 滚轮模式开关 =====
+function toggleScrollMode() {
+    state.scrollMode = !state.scrollMode;
+    updateScrollModeUI();
+    if (typeof saveClientState === 'function') saveClientState();
 }
 
-/**
- * 初始化滚轮面板的触摸/点击事件
- */
-function setupScrollPanel() {
-    const thumb = document.getElementById('scroll-thumb');
-    const arrowUp = document.getElementById('scroll-arrow-up');
-    const arrowDown = document.getElementById('scroll-arrow-down');
+function updateScrollModeUI() {
+    const btn = document.getElementById('btn-scroll');
+    btn.classList.toggle('active', state.scrollMode);
 
-    if (!thumb) return;
-
-    // --- 滑动区域：触摸滑动 → 发送 scroll ---
-    let scrollTouchStartY = 0;
-    let scrollAccumulated = 0;       // 累积的滑动距离
-    let scrollLastSendTime = 0;
-    const SCROLL_STEP = 15;          // 每 15px 触发一次滚动
-    const SCROLL_SEND_INTERVAL = 50; // 最小发送间隔 50ms
-
-    thumb.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const touch = e.touches[0];
-        scrollTouchStartY = touch.clientY;
-        scrollAccumulated = 0;
-        thumb.classList.add('active');
-    }, { passive: false });
-
-    thumb.addEventListener('touchmove', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const touch = e.touches[0];
-        const deltaY = touch.clientY - scrollTouchStartY;
-        scrollTouchStartY = touch.clientY;
-        scrollAccumulated += deltaY;
-
-        const now = Date.now();
-        if (Math.abs(scrollAccumulated) >= SCROLL_STEP && now - scrollLastSendTime >= SCROLL_SEND_INTERVAL) {
-            const direction = scrollAccumulated > 0 ? 'down' : 'up';
-            const amount = Math.min(Math.round(Math.abs(scrollAccumulated) / SCROLL_STEP), 8);
-            // 获取屏幕中心坐标作为滚动位置
-            const centerX = Math.round(state.screenWidth / 2);
-            const centerY = Math.round(state.screenHeight / 2);
-            sendAction({
-                action: 'scroll',
-                x: centerX,
-                y: centerY,
-                direction: direction,
-                amount: amount,
-            });
-            scrollAccumulated = 0;
-            scrollLastSendTime = now;
-        }
-    }, { passive: false });
-
-    thumb.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        thumb.classList.remove('active');
-        scrollAccumulated = 0;
-    }, { passive: false });
-
-    thumb.addEventListener('touchcancel', (e) => {
-        thumb.classList.remove('active');
-        scrollAccumulated = 0;
-    });
-
-    // --- 上/下箭头：点击滚动 ---
-    let arrowTimer = null;
-    let arrowInterval = null;
-
-    function startArrowScroll(direction) {
-        const centerX = Math.round(state.screenWidth / 2);
-        const centerY = Math.round(state.screenHeight / 2);
-        const doScroll = () => {
-            sendAction({
-                action: 'scroll',
-                x: centerX,
-                y: centerY,
-                direction: direction,
-                amount: 3,
-            });
-        };
-        doScroll(); // 立即滚动一次
-        // 长按持续滚动
-        arrowTimer = setTimeout(() => {
-            arrowInterval = setInterval(doScroll, 100);
-        }, 300);
+    // 滚轮模式开启时显示橙色指示器
+    const indicator = document.getElementById('mode-indicator');
+    if (state.scrollMode) {
+        indicator.className = 'scroll';
+        indicator.textContent = '滚轮模式';
+    } else {
+        // 恢复当前 browse/control 模式指示
+        updateModeUI();
+        return;
     }
-
-    function stopArrowScroll() {
-        clearTimeout(arrowTimer);
-        clearInterval(arrowInterval);
-        arrowTimer = null;
-        arrowInterval = null;
-    }
-
-    // 上箭头
-    arrowUp.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        startArrowScroll('up');
-    }, { passive: false });
-    arrowUp.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        stopArrowScroll();
-    }, { passive: false });
-    arrowUp.addEventListener('touchcancel', () => stopArrowScroll());
-
-    // 下箭头
-    arrowDown.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        startArrowScroll('down');
-    }, { passive: false });
-    arrowDown.addEventListener('touchend', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        stopArrowScroll();
-    }, { passive: false });
-    arrowDown.addEventListener('touchcancel', () => stopArrowScroll());
-
-    // 阻止面板上的触摸事件冒泡到 screen-container
-    const panel = document.getElementById('scroll-panel');
-    panel.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: false });
-    panel.addEventListener('touchmove', (e) => { e.preventDefault(); e.stopPropagation(); }, { passive: false });
-    panel.addEventListener('touchend', (e) => e.stopPropagation(), { passive: false });
+    indicator.style.opacity = '1';
+    clearTimeout(indicator._fadeTimer);
+    indicator._fadeTimer = setTimeout(() => { indicator.style.opacity = '0'; }, 1500);
 }
 
 // ===== 窗口选择弹窗 =====
@@ -457,6 +344,7 @@ function createWindowItem(win, { isCurrent, isPinned, isFocused }) {
     // 标签
     let tags = '';
     if (isFocused && !isPinned) tags += ' <span class="window-focus-tag">焦点</span>';
+    if (win.offscreen) tags += ' <span class="window-offscreen-tag">超出屏幕</span>';
 
     item.innerHTML = `
         <div class="window-item-icon">${icon}</div>
@@ -539,6 +427,16 @@ async function selectWindow(windowId, windowName, windowOwner) {
         // 1. 保存当前窗口/全屏的缩放位置
         saveCurrentViewToCache();
 
+        // 2. 标记窗口切换过渡期（禁止操控，直到新画面到达）
+        //    这解决了切换不同窗口时的坐标错乱问题：
+        //    selectWindow API 返回后 screenWidth/Height 立即更新为新窗口尺寸，
+        //    但 WebRTC 视频帧还在推送旧窗口画面，canvas 显示比例不一致，
+        //    导致 mapToScreen 的坐标映射错乱。
+        const isWindowChange = (windowId !== state.currentWindowId);
+        if (isWindowChange) {
+            state.windowSwitching = true;
+        }
+
         const body = windowId !== null
             ? { window_id: windowId, window_name: windowName || '', window_owner: windowOwner || '' }
             : { window_id: null };
@@ -551,23 +449,23 @@ async function selectWindow(windowId, windowName, windowOwner) {
         const data = await resp.json();
 
         if (data.success) {
-            // 2. 更新前端的屏幕尺寸信息
+            // 3. 更新前端的屏幕尺寸信息
             if (data.screen_info) {
                 state.screenWidth = data.screen_info.width;
                 state.screenHeight = data.screen_info.height;
             }
 
-            // 3. 更新当前窗口 ID
+            // 4. 更新当前窗口 ID
             state.currentWindowId = windowId;
 
-            // 4. 恢复目标窗口的缩放位置
+            // 5. 恢复目标窗口的缩放位置
             restoreViewFromCache(windowId);
 
-            // 5. 更新 UI
+            // 6. 更新 UI
             updateWindowBtnUI();
             hideWindowPicker();
 
-            // 6. 显示一个模式提示
+            // 7. 显示一个模式提示
             const mode = data.mode === 'window' ? `窗口: ${windowOwner}` : '全屏模式';
             const indicator = document.getElementById('mode-indicator');
             indicator.textContent = mode;
@@ -576,11 +474,26 @@ async function selectWindow(windowId, windowName, windowOwner) {
             clearTimeout(indicator._fadeTimer);
             indicator._fadeTimer = setTimeout(() => { indicator.style.opacity = '0'; }, 2000);
 
-            // 7. 持久化状态到 localStorage
+            // 8. 持久化状态到 localStorage
             if (typeof saveClientState === 'function') saveClientState();
+
+            // 9. 超时保护：如果新旧窗口尺寸相同，视频帧尺寸不会变化，
+            //    render loop 不会触发解锁。设置超时自动解除切换锁定。
+            if (state.windowSwitching) {
+                setTimeout(() => {
+                    if (state.windowSwitching) {
+                        state.windowSwitching = false;
+                        console.log('[AnyBot] 窗口切换超时解锁（新旧窗口尺寸可能相同）');
+                    }
+                }, 500);
+            }
+        } else {
+            // API 失败，解除切换锁定
+            state.windowSwitching = false;
         }
     } catch (e) {
         console.error('切换窗口失败:', e);
+        state.windowSwitching = false;
     }
 }
 

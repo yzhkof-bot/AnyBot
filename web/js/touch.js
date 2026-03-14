@@ -27,6 +27,58 @@ function setupTouchEvents() {
     const DRAG_MOVE_THRESHOLD = 8;    // 移动超过 8px 进入拖拽模式（区分点击和拖拽）
     const DRAG_SEND_INTERVAL = 30;    // drag_move 最小发送间隔 30ms（约 33fps）
 
+    // 滚轮模式状态
+    let scrollStartY = 0;
+    let scrollStartX = 0;
+    let scrollAccumY = 0;
+    let scrollAccumX = 0;
+    let scrollLastSendTime = 0;
+    let scrollIndicator = null;
+    const SCROLL_STEP = 15;           // 每 15px 触发一次滚动
+    const SCROLL_SEND_INTERVAL = 50;  // 最小发送间隔 50ms
+
+    /**
+     * 创建/显示滚轮模式触摸指示器（四向箭头 + 中心圆点）
+     */
+    function showScrollIndicator(x, y) {
+        if (!scrollIndicator) {
+            scrollIndicator = document.createElement('div');
+            scrollIndicator.className = 'scroll-touch-indicator';
+            scrollIndicator.innerHTML =
+                '<div class="scroll-arrow up"></div>' +
+                '<div class="scroll-arrow down"></div>' +
+                '<div class="scroll-arrow left"></div>' +
+                '<div class="scroll-arrow right"></div>' +
+                '<div class="scroll-center"></div>';
+            document.body.appendChild(scrollIndicator);
+        }
+        scrollIndicator.style.left = x + 'px';
+        scrollIndicator.style.top = y + 'px';
+        scrollIndicator.style.display = 'block';
+        // 重置所有箭头高亮
+        scrollIndicator.querySelectorAll('.scroll-arrow').forEach(a => a.classList.remove('active'));
+    }
+
+    function updateScrollIndicatorDirection(dy, dx) {
+        if (!scrollIndicator) return;
+        const arrows = scrollIndicator.querySelectorAll('.scroll-arrow');
+        arrows.forEach(a => a.classList.remove('active'));
+        // 高亮主要滑动方向
+        if (Math.abs(dy) >= Math.abs(dx)) {
+            if (dy < -5) scrollIndicator.querySelector('.scroll-arrow.up').classList.add('active');
+            else if (dy > 5) scrollIndicator.querySelector('.scroll-arrow.down').classList.add('active');
+        } else {
+            if (dx < -5) scrollIndicator.querySelector('.scroll-arrow.left').classList.add('active');
+            else if (dx > 5) scrollIndicator.querySelector('.scroll-arrow.right').classList.add('active');
+        }
+    }
+
+    function hideScrollIndicator() {
+        if (scrollIndicator) {
+            scrollIndicator.style.display = 'none';
+        }
+    }
+
     /**
      * 显示拖拽指示器（触摸点附近的蓝色圆环）
      */
@@ -166,6 +218,49 @@ function setupTouchEvents() {
         touchStartPos = { x: touch.clientX, y: touch.clientY };
         isTouchMoved = false;
 
+        // 双指触摸 → 强制回到浏览模式（从任何模式）
+        if (e.touches.length >= 2) {
+            // 退出滚轮模式
+            if (state.scrollMode) {
+                state.scrollMode = false;
+                hideScrollIndicator();
+                updateScrollModeUI();
+                if (typeof saveClientState === 'function') saveClientState();
+            }
+            // 退出操作模式
+            if (state.mode === 'control') {
+                // 结束正在进行的拖拽
+                if (isDragging) {
+                    exitDragMode(touch.clientX, touch.clientY);
+                }
+                clearTimeout(longPressTimer);
+                state.mode = 'browse';
+                updateModeUI();
+                if (typeof saveClientState === 'function') saveClientState();
+            }
+            // 收起虚拟键盘
+            if (state.keyboardOpen) {
+                toggleKeyboard();
+            }
+            // 初始化浏览模式双指缩放
+            isPinching = true;
+            lastPinchDist = getPinchDist(e.touches[0], e.touches[1]);
+            lastPinchMid = getPinchMid(e.touches[0], e.touches[1]);
+            return;
+        }
+
+        // 滚轮模式优先：单指滑动 = 滚动
+        if (state.scrollMode) {
+            scrollStartY = touch.clientY;
+            scrollStartX = touch.clientX;
+            scrollAccumY = 0;
+            scrollAccumX = 0;
+            scrollLastSendTime = 0;
+            isPinching = false;
+            showScrollIndicator(touch.clientX, touch.clientY);
+            return;
+        }
+
         if (state.mode === 'browse') {
             if (e.touches.length === 2) {
                 isPinching = true;
@@ -194,6 +289,44 @@ function setupTouchEvents() {
     // ===== touchmove =====
     container.addEventListener('touchmove', (e) => {
         e.preventDefault();
+
+        // 滚轮模式：单指滚动（双指已在 touchstart 切回浏览模式）
+        if (state.scrollMode) {
+            if (e.touches.length !== 1) return;
+            const touch = e.touches[0];
+            const deltaY = touch.clientY - scrollStartY;
+            const deltaX = touch.clientX - scrollStartX;
+            scrollStartY = touch.clientY;
+            scrollStartX = touch.clientX;
+            scrollAccumY += deltaY;
+            scrollAccumX += deltaX;
+            updateScrollIndicatorDirection(scrollAccumY, scrollAccumX);
+
+            const now = Date.now();
+            if (now - scrollLastSendTime < SCROLL_SEND_INTERVAL) return;
+
+            const pos = mapToScreen(touchStartPos.x, touchStartPos.y);
+            let sent = false;
+
+            // 垂直滚动：Y 轴达到阈值且 Y 是主方向
+            if (Math.abs(scrollAccumY) >= SCROLL_STEP && Math.abs(scrollAccumY) > Math.abs(scrollAccumX)) {
+                const direction = scrollAccumY > 0 ? 'down' : 'up';
+                const amount = Math.min(Math.round(Math.abs(scrollAccumY) / SCROLL_STEP), 8);
+                sendAction({ action: 'scroll', x: pos.x, y: pos.y, direction, amount });
+                scrollAccumY = 0;
+                sent = true;
+            }
+            // 水平滚动：X 轴达到阈值且 X 是主方向
+            if (!sent && Math.abs(scrollAccumX) >= SCROLL_STEP && Math.abs(scrollAccumX) > Math.abs(scrollAccumY)) {
+                const direction = scrollAccumX > 0 ? 'left' : 'right';
+                const amount = Math.min(Math.round(Math.abs(scrollAccumX) / SCROLL_STEP), 8);
+                sendAction({ action: 'scroll', x: pos.x, y: pos.y, direction, amount });
+                scrollAccumX = 0;
+                sent = true;
+            }
+            if (sent) scrollLastSendTime = now;
+            return;
+        }
 
         if (state.mode === 'browse') {
             if (e.touches.length === 2) {
@@ -303,6 +436,14 @@ function setupTouchEvents() {
     container.addEventListener('touchend', (e) => {
         e.preventDefault();
         clearTimeout(longPressTimer);
+
+        // 滚轮模式：清理状态
+        if (state.scrollMode) {
+            scrollAccumY = 0;
+            scrollAccumX = 0;
+            hideScrollIndicator();
+            return;
+        }
 
         if (state.mode === 'browse') {
             if (isPinching && e.touches.length === 1) {

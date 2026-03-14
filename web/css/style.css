@@ -161,6 +161,85 @@ body {
 }
 #mode-indicator.browse { background: rgba(48,209,88,0.25); color: #30d158; }
 #mode-indicator.control { background: rgba(255,59,48,0.25); color: #ff3b30; }
+#mode-indicator.scroll { background: rgba(255,149,0,0.25); color: #ff9500; }
+
+/* ===== 滚轮模式触摸指示器 ===== */
+.scroll-touch-indicator {
+    position: fixed;
+    width: 88px;
+    height: 88px;
+    pointer-events: none;
+    z-index: 200;
+    transform: translate(-50%, -50%);
+    display: none;
+}
+
+.scroll-touch-indicator .scroll-arrow {
+    position: absolute;
+    width: 0;
+    height: 0;
+    opacity: 0.7;
+}
+
+/* 上箭头 */
+.scroll-touch-indicator .scroll-arrow.up {
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-bottom: 14px solid #ff9500;
+}
+
+/* 下箭头 */
+.scroll-touch-indicator .scroll-arrow.down {
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    border-left: 10px solid transparent;
+    border-right: 10px solid transparent;
+    border-top: 14px solid #ff9500;
+}
+
+/* 左箭头 */
+.scroll-touch-indicator .scroll-arrow.left {
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    border-top: 10px solid transparent;
+    border-bottom: 10px solid transparent;
+    border-right: 14px solid #ff9500;
+}
+
+/* 右箭头 */
+.scroll-touch-indicator .scroll-arrow.right {
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    border-top: 10px solid transparent;
+    border-bottom: 10px solid transparent;
+    border-left: 14px solid #ff9500;
+}
+
+/* 中心圆点 */
+.scroll-touch-indicator .scroll-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 16px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: rgba(255, 149, 0, 0.3);
+    border: 2px solid rgba(255, 149, 0, 0.7);
+}
+
+/* 滑动时高亮对应方向的箭头 */
+.scroll-touch-indicator .scroll-arrow.active { opacity: 1; }
+.scroll-touch-indicator .scroll-arrow.up.active { border-bottom-color: #ffb340; }
+.scroll-touch-indicator .scroll-arrow.down.active { border-top-color: #ffb340; }
+.scroll-touch-indicator .scroll-arrow.left.active { border-right-color: #ffb340; }
+.scroll-touch-indicator .scroll-arrow.right.active { border-left-color: #ffb340; }
 
 /* ===== 点击反馈涟漪 ===== */
 .click-ripple {
@@ -338,112 +417,6 @@ body {
 
 #connect-info { color: #666; font-size: 12px; margin-top: 12px; }
 
-/* ===== 滚轮滑动面板 ===== */
-#scroll-panel {
-    position: fixed;
-    left: 0;
-    bottom: 50px;
-    width: 52px;
-    height: 0;
-    z-index: 95;
-    transition: height 0.25s ease;
-    overflow: hidden;
-    pointer-events: none;
-}
-
-#scroll-panel.show {
-    height: 55vh;
-    pointer-events: auto;
-}
-
-#scroll-track {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    background: rgba(30, 30, 30, 0.92);
-    backdrop-filter: blur(10px);
-    border-right: 1px solid #333;
-    border-top: 1px solid #333;
-    border-top-right-radius: 14px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 0;
-    touch-action: none;
-    -webkit-user-select: none;
-    user-select: none;
-}
-
-#scroll-arrow-up,
-#scroll-arrow-down {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid #444;
-    color: #aaa;
-    font-size: 14px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 0.15s;
-}
-
-#scroll-arrow-up:active,
-#scroll-arrow-down:active {
-    background: rgba(255,255,255,0.2);
-}
-
-#scroll-thumb {
-    flex: 1;
-    width: 36px;
-    margin: 8px 0;
-    border-radius: 18px;
-    background: linear-gradient(180deg, rgba(10,132,255,0.15) 0%, rgba(10,132,255,0.25) 50%, rgba(10,132,255,0.15) 100%);
-    border: 1px solid rgba(10,132,255,0.4);
-    position: relative;
-    overflow: hidden;
-}
-
-/* 滑动区域中间的装饰线 */
-#scroll-thumb::after {
-    content: '';
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    width: 16px;
-    height: 2px;
-    background: rgba(10,132,255,0.5);
-    border-radius: 1px;
-    box-shadow:
-        0 -6px 0 rgba(10,132,255,0.5),
-        0 6px 0 rgba(10,132,255,0.5);
-}
-
-/* 滑动时的高亮效果 */
-#scroll-thumb.active {
-    background: linear-gradient(180deg, rgba(10,132,255,0.25) 0%, rgba(10,132,255,0.4) 50%, rgba(10,132,255,0.25) 100%);
-    border-color: rgba(10,132,255,0.7);
-}
-
-/* 滚动方向指示器 */
-#scroll-panel .scroll-dir-indicator {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 18px;
-    color: rgba(10,132,255,0.9);
-    pointer-events: none;
-    transition: opacity 0.15s;
-    opacity: 0;
-}
-
-#scroll-panel .scroll-dir-indicator.show { opacity: 1; }
-
 /* ===== 窗口选择弹窗 ===== */
 #window-picker-overlay {
     position: fixed;
@@ -587,6 +560,18 @@ body {
     border-radius: 4px;
     background: rgba(10,132,255,0.25);
     color: #0a84ff;
+    font-weight: 600;
+    vertical-align: middle;
+    margin-left: 4px;
+}
+
+.window-offscreen-tag {
+    display: inline-block;
+    font-size: 9px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255,149,0,0.25);
+    color: #ff9500;
     font-weight: 600;
     vertical-align: middle;
     margin-left: 4px;

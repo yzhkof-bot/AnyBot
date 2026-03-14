@@ -8,3 +8,5 @@ numpy>=1.24.0
 aiortc>=1.9.0
 pydantic>=2.0
 loguru>=0.7.0
+# macOS Accessibility API (AXUIElement) — 窗口焦点精确切换
+pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"
