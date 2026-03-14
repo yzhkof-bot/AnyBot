@@ -173,20 +173,20 @@ function setupTouchEvents() {
         const scaledH = state.canvasDisplayH * v.scale;
         const base = getCanvasBaseOffset();
 
-        if (scaledW <= cw) {
-            v.translateX = 0;
-        } else {
-            const minX = cw - base.x - scaledW;
-            const maxX = base.x;
-            v.translateX = Math.max(minX, Math.min(maxX, v.translateX));
-        }
-        if (scaledH <= ch) {
-            v.translateY = 0;
-        } else {
-            const minY = ch - base.y - scaledH;
-            const maxY = base.y;
-            v.translateY = Math.max(minY, Math.min(maxY, v.translateY));
-        }
+        // 统一公式：画面左边界不超出容器左边界，右边界不超出容器右边界
+        // 画面左边界屏幕坐标 = base.x + translateX，需 >= 0  →  translateX >= -base.x
+        // 画面右边界屏幕坐标 = base.x + translateX + scaledW，需 <= cw  →  translateX <= cw - base.x - scaledW
+        const minX = Math.min(cw - base.x - scaledW, -base.x);
+        const maxX = Math.max(cw - base.x - scaledW, -base.x);
+        // 限制范围：但不能超出居中位置（画面小于容器时 minX > 0, maxX < 0 不合理，取 min/max 修正）
+        // 当 scaledW <= cw 时：-base.x < 0, cw-base.x-scaledW = base.x > 0 → 范围 [-base.x, base.x] 没问题
+        // 当 scaledW > cw 时：-base.x < 0, cw-base.x-scaledW < -base.x → min 是后者 → 也没问题
+        v.translateX = Math.max(minX, Math.min(maxX, v.translateX));
+
+        // Y 轴同理
+        const minY = Math.min(ch - base.y - scaledH, -base.y);
+        const maxY = Math.max(ch - base.y - scaledH, -base.y);
+        v.translateY = Math.max(minY, Math.min(maxY, v.translateY));
     }
 
     /**
