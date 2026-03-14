@@ -9,6 +9,10 @@ function toggleMode() {
         state.mode = 'control';
     } else {
         state.mode = 'browse';
+        // 进入浏览模式时自动关闭键盘（浏览模式下键盘输入无效）
+        if (state.keyboardOpen) {
+            toggleKeyboard();
+        }
     }
     updateModeUI();
     // 持久化模式状态
@@ -91,6 +95,12 @@ function toggleKeyboard() {
     btn.classList.toggle('active', state.keyboardOpen);
     if (state.keyboardOpen) {
         document.getElementById('text-input').focus();
+        // 打开键盘时自动切换到操作模式（浏览模式下键盘输入无效）
+        if (state.mode === 'browse') {
+            state.mode = 'control';
+            updateModeUI();
+            if (typeof saveClientState === 'function') saveClientState();
+        }
     }
     updateCanvasSize();
 }
@@ -117,23 +127,45 @@ function updateFps() {
     state.frameCount++;
     const now = Date.now();
     if (now - state.lastFpsTime >= 1000) {
-        const fps = state.frameCount;
+        const elapsed = (now - state.lastFpsTime) / 1000;
+        const fps = Math.round(state.frameCount / elapsed);
         document.getElementById('fps-text').textContent = `${fps} fps`;
 
-        // 带宽显示
-        const bytes = state.bytesReceived;
-        let bwText;
-        if (bytes >= 1048576) {
-            bwText = (bytes / 1048576).toFixed(1) + ' MB/s';
+        if (state.streamMode === 'webrtc' && state.pc) {
+            // WebRTC 模式：通过 RTCPeerConnection.getStats() 获取真实流量
+            state.pc.getStats().then(stats => {
+                let totalBytes = 0;
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        totalBytes = report.bytesReceived || 0;
+                    }
+                });
+                // 计算本周期内的增量
+                const delta = totalBytes - (state._lastWebrtcBytes || 0);
+                state._lastWebrtcBytes = totalBytes;
+                const bytesPerSec = delta / elapsed;
+                displayBandwidth(bytesPerSec);
+            });
         } else {
-            bwText = Math.round(bytes / 1024) + ' KB/s';
+            // MJPEG 模式：使用 WebSocket 累计的字节数
+            const bytesPerSec = state.bytesReceived / elapsed;
+            displayBandwidth(bytesPerSec);
+            state.bytesReceived = 0;
         }
-        document.getElementById('bw-text').textContent = bwText;
 
         state.frameCount = 0;
-        state.bytesReceived = 0;
         state.lastFpsTime = now;
     }
+}
+
+function displayBandwidth(bytesPerSec) {
+    let bwText;
+    if (bytesPerSec >= 1048576) {
+        bwText = (bytesPerSec / 1048576).toFixed(1) + ' MB/s';
+    } else {
+        bwText = Math.round(bytesPerSec / 1024) + ' KB/s';
+    }
+    document.getElementById('bw-text').textContent = bwText;
 }
 
 // ===== 全屏 + 横屏 =====

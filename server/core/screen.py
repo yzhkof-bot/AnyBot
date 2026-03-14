@@ -80,6 +80,7 @@ class ScreenCapture:
         self._window_name: Optional[str] = None      # 当前捕获的窗口名
         self._window_owner: Optional[str] = None     # 当前捕获的窗口所属应用
         self._window_bounds: Optional[dict] = None   # 窗口在屏幕上的位置 {x, y, w, h}
+        self._window_pid: Optional[int] = None       # 目标窗口的进程 PID
         # 置顶窗口列表 [{id, owner, name}, ...]
         self._pinned_windows: List[dict] = []
         self._pinned_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.anybot_pinned.json')
@@ -143,8 +144,8 @@ class ScreenCapture:
             kCGNullWindowID,
         )
 
-        screen_w = self._screen_info["width"]
-        screen_h = self._screen_info["height"]
+        # 必须使用物理屏幕分辨率判断，不能用 _screen_info（窗口模式下会变成窗口截图尺寸）
+        screen_w, screen_h = self.physical_screen_size
 
         pinned_ids = {p["id"] for p in self._pinned_windows}
         all_windows = []
@@ -296,6 +297,7 @@ class ScreenCapture:
             self._window_name = None
             self._window_owner = None
             self._window_bounds = None
+            self._window_pid = None
             # 恢复全屏幕尺寸
             self._update_screen_info()
             logger.info("切换到全屏捕获模式")
@@ -306,8 +308,9 @@ class ScreenCapture:
             self._window_id = window_id
             self._window_name = window_name
             self._window_owner = window_owner
-            # 获取窗口的屏幕位置 (bounds)
+            # 获取窗口的屏幕位置 (bounds) 和进程 PID
             self._window_bounds = self._get_window_bounds(window_id)
+            self._window_pid = self._get_window_pid(window_id)
             # 切换窗口时立即激活目标窗口到前台
             # 重置节流时间，确保 activate_window 一定执行
             self._last_activate_time = 0
@@ -326,10 +329,12 @@ class ScreenCapture:
                     logger.warning(f"窗口 {window_id} 捕获失败，可能已关闭")
                     self._window_id = None
                     self._window_bounds = None
+                    self._window_pid = None
             except Exception as e:
                 logger.error(f"窗口模式切换失败: {e}")
                 self._window_id = None
                 self._window_bounds = None
+                self._window_pid = None
 
     def _get_window_bounds(self, window_id: int) -> Optional[dict]:
         """获取指定窗口在屏幕上的位置和尺寸"""
@@ -348,6 +353,23 @@ class ScreenCapture:
                     "w": int(bounds.get("Width", 0)),
                     "h": int(bounds.get("Height", 0)),
                 }
+        return None
+
+    def _get_window_pid(self, window_id: int) -> Optional[int]:
+        """获取指定窗口所属进程的 PID"""
+        if not _HAS_QUARTZ:
+            return None
+        window_list = CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            kCGNullWindowID,
+        )
+        for win in window_list:
+            if win.get("kCGWindowNumber", 0) == window_id:
+                pid = win.get("kCGWindowOwnerPID", 0)
+                if pid:
+                    logger.debug(f"窗口 {window_id} 的进程 PID: {pid}")
+                    return pid
+        logger.warning(f"未找到窗口 {window_id} 的 PID")
         return None
 
     def get_window_offset(self) -> Tuple[int, int]:
@@ -734,6 +756,7 @@ class ScreenCapture:
             self._window_name = None
             self._window_owner = None
             self._window_bounds = None
+            self._window_pid = None
             # 恢复屏幕尺寸信息
             self._update_screen_info()
 

@@ -130,6 +130,9 @@ class ActionExecutor:
         try:
             logger.debug(f"执行动作: {req.action.value}")
 
+            # 同步目标进程 PID 到 InputController（用于键盘事件直发）
+            self.input_ctrl.set_target_pid(self.screen._window_pid)
+
             # 窗口模式下，执行操控动作前先确保目标窗口在前台
             # （排除截屏、光标查询、等待等不需要窗口聚焦的操作）
             _PASSIVE_ACTIONS = {ActionType.SCREENSHOT, ActionType.CURSOR_POSITION, ActionType.WAIT}

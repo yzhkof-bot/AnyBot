@@ -44,6 +44,7 @@ const state = {
     view: { scale: 1, translateX: 0, translateY: 0 },
     // 窗口模式
     currentWindowId: null,          // 当前选中的窗口 ID（null=全屏）
+    _windowBounds: null,            // 当前窗口的屏幕位置 {x, y, w, h}（光标映射用）
     windowViewCache: {},            // 每个窗口/全屏的缩放位置记忆: { windowId: {scale, translateX, translateY} }
     windowSwitching: false,         // 窗口切换过渡中（等待视频帧更新，期间禁止操控）
     // 渲染循环标志
@@ -125,6 +126,7 @@ async function startWebRTC(host, protocol) {
         iceServers: [],  // 局域网直连，不需要 STUN/TURN
     });
     state.pc = pc;
+    state._lastWebrtcBytes = 0;
 
     // 接收服务端推送的视频轨道
     pc.addEventListener('track', (event) => {
@@ -326,6 +328,8 @@ function handleDataChannelMessage(data) {
             const rtt = Date.now() - msg.ts;
             const fpsEl = document.getElementById('fps-text');
             if (fpsEl) fpsEl.dataset.rtt = rtt;
+        } else if (msg.type === 'cursor') {
+            handleCursorMessage(msg);
         }
     } catch (e) {
         // 忽略
@@ -449,9 +453,13 @@ function handleTextMessage(text) {
 }
 
 function handleCursorMessage(msg) {
-    if (typeof updateCursorIndicator === 'function') {
-        updateCursorIndicator(msg.x, msg.y);
+    // 保存窗口 bounds（窗口模式下光标坐标转换需要）
+    if (msg.bounds) {
+        state._windowBounds = msg.bounds;
+    } else if (state.currentWindowId === null) {
+        state._windowBounds = null;
     }
+    updateCursorIndicator(msg.x, msg.y);
     if (msg.fps !== undefined) {
         const fpsEl = document.getElementById('fps-text');
         if (fpsEl) fpsEl.dataset.serverFps = msg.fps;
@@ -551,6 +559,71 @@ function mapToScreen(touchX, touchY) {
         x: Math.round(relX * mapW),
         y: Math.round(relY * mapH),
     };
+}
+
+// ===== 光标跟随：Mac 屏幕坐标 → 手机页面位置 =====
+
+/** 光标自动隐藏定时器 */
+let _cursorHideTimer = null;
+
+/**
+ * 将服务端推送的 Mac 光标坐标映射到手机页面上并显示红点
+ *
+ * 映射过程（mapToScreen 的反向）：
+ *   Mac坐标 → 归一化(0~1) → canvas 视口坐标 → 加上缩放/平移变换 → fixed 页面坐标
+ *
+ * @param {number} macX - Mac 屏幕 X 坐标（全局）
+ * @param {number} macY - Mac 屏幕 Y 坐标（全局）
+ */
+function updateCursorIndicator(macX, macY) {
+    const el = document.getElementById('cursor-indicator');
+    if (!el || !state.canvas) return;
+
+    // Step 1: 确定映射用的分辨率（和 mapToScreen 保持一致）
+    let mapW, mapH;
+    if (state.currentWindowId !== null && state.imageWidth > 0) {
+        mapW = state.imageWidth;
+        mapH = state.imageHeight;
+    } else {
+        mapW = state.screenWidth;
+        mapH = state.screenHeight;
+    }
+    if (mapW <= 0 || mapH <= 0) return;
+
+    // 窗口模式下需要将全局坐标转换为窗口内相对坐标
+    // 服务端推送的是 pyautogui.position() 的全局坐标
+    let relX, relY;
+    if (state.currentWindowId !== null && state._windowBounds) {
+        const wb = state._windowBounds;
+        relX = (macX - wb.x) / wb.w;
+        relY = (macY - wb.y) / wb.h;
+    } else {
+        // 全屏模式：直接归一化
+        relX = macX / mapW;
+        relY = macY / mapH;
+    }
+
+    // 光标在可视区域外则隐藏
+    if (relX < -0.02 || relX > 1.02 || relY < -0.02 || relY > 1.02) {
+        el.classList.remove('visible');
+        return;
+    }
+
+    // Step 2: 归一化坐标 → Canvas 上的 CSS 像素位置
+    const rect = state.canvas.getBoundingClientRect();
+    const pageX = rect.left + relX * rect.width;
+    const pageY = rect.top + relY * rect.height;
+
+    // Step 3: 设置位置并显示（CSS transform: translate(-50%,-50%) 居中）
+    el.style.left = pageX + 'px';
+    el.style.top = pageY + 'px';
+    el.classList.add('visible');
+
+    // 2 秒无更新自动隐藏
+    clearTimeout(_cursorHideTimer);
+    _cursorHideTimer = setTimeout(() => {
+        el.classList.remove('visible');
+    }, 2000);
 }
 
 // ===== 发送操控指令 =====

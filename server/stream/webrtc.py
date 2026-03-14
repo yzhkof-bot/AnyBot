@@ -106,6 +106,8 @@ router = APIRouter(prefix="/api/webrtc")
 executor: ActionExecutor = None
 # 活跃的 PeerConnection 集合
 _peer_connections: set[RTCPeerConnection] = set()
+# 活跃的 DataChannel 集合（用于服务端主动推送光标位置）
+_data_channels: set = set()
 # MediaRelay 用于多客户端共享同一视频源
 _relay = MediaRelay()
 
@@ -140,6 +142,7 @@ class ScreenVideoTrack(MediaStreamTrack):
         self._start_time: Optional[float] = None
         self._frame_count = 0
         self._timestamp = 0
+        self._cursor_push_counter = 0
 
     async def recv(self) -> VideoFrame:
         """每次被 aiortc 调用时截取一帧屏幕
@@ -182,6 +185,31 @@ class ScreenVideoTrack(MediaStreamTrack):
         self._timestamp += int(90000 / current_fps)
 
         self._frame_count += 1
+
+        # 每 5 帧通过 DataChannel 推送光标位置
+        self._cursor_push_counter += 1
+        if self._cursor_push_counter >= 5 and _data_channels:
+            self._cursor_push_counter = 0
+            try:
+                pos = executor.input_ctrl.get_cursor_position()
+                cursor_data = {
+                    "type": "cursor",
+                    "x": pos["x"],
+                    "y": pos["y"],
+                    "fps": current_fps,
+                }
+                # 窗口模式下附带窗口 bounds
+                if executor.screen._window_id is not None and executor.screen._window_bounds:
+                    cursor_data["bounds"] = executor.screen._window_bounds
+                cursor_msg = json.dumps(cursor_data)
+                for ch in list(_data_channels):
+                    try:
+                        ch.send(cursor_msg)
+                    except Exception:
+                        _data_channels.discard(ch)
+            except Exception:
+                pass
+
         return frame
 
 
@@ -230,10 +258,16 @@ async def webrtc_offer(request: Request):
     @pc.on("datachannel")
     def on_datachannel(channel):
         logger.info(f"[{pc_id}] DataChannel '{channel.label}' 已建立")
+        _data_channels.add(channel)
 
         @channel.on("message")
         def on_message(message):
             _handle_datachannel_message(channel, message, pc_id)
+
+        @channel.on("close")
+        def on_close():
+            _data_channels.discard(channel)
+            logger.debug(f"[{pc_id}] DataChannel 已关闭，剩余: {len(_data_channels)}")
 
     # 处理 offer → 生成 answer
     await pc.setRemoteDescription(offer)

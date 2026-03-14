@@ -177,12 +177,16 @@ async def screen_stream(websocket: WebSocket):
                 if cursor_push_counter >= 5:
                     cursor_push_counter = 0
                     pos = executor.input_ctrl.get_cursor_position()
-                    await websocket.send_text(json.dumps({
+                    cursor_data = {
                         "type": "cursor",
                         "x": pos["x"],
                         "y": pos["y"],
                         "fps": streamer.current_fps,
-                    }))
+                    }
+                    # 窗口模式下附带窗口 bounds（窗口可能被拖动，需实时更新）
+                    if executor.screen._window_id is not None and executor.screen._window_bounds:
+                        cursor_data["bounds"] = executor.screen._window_bounds
+                    await websocket.send_text(json.dumps(cursor_data))
 
                 # 每 300 帧输出一次统计日志
                 stats_log_counter += 1
