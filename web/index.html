@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AnyBot - 远程控制</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- 连接面板 -->
+    <div id="connect-overlay">
+        <h1>AnyBot</h1>
+        <p>远程控制你的 Mac</p>
+        <button id="connect-btn" onclick="startConnection()">连接</button>
+        <div id="connect-info"></div>
+    </div>
+
+    <!-- 状态栏 -->
+    <div id="status-bar">
+        <div class="status-left">
+            <div id="status-dot"></div>
+            <span id="status-text">未连接</span>
+        </div>
+        <div class="status-right">
+            <span id="fps-text"></span>
+            <button class="tool-btn" onclick="toggleFullscreenLandscape()" id="btn-fullscreen" style="height:26px;padding:0 10px;font-size:11px;">🔲 全屏</button>
+        </div>
+    </div>
+
+    <!-- 光标指示器 -->
+    <div id="cursor-indicator"></div>
+
+    <!-- 拖拽状态 -->
+    <div id="drag-indicator">拖拽中...</div>
+
+    <!-- 模式指示器 -->
+    <div id="mode-indicator" class="browse">浏览模式</div>
+
+    <!-- 屏幕画面 -->
+    <div id="screen-container">
+        <canvas id="screen-canvas"></canvas>
+    </div>
+
+    <!-- 工具栏 -->
+    <div id="toolbar">
+        <button class="tool-btn" onclick="toggleMode()" id="btn-mode" style="background:#30d158;border-color:#30d158">👁 浏览</button>
+        <button class="tool-btn" onclick="toggleKeyboard()" id="btn-keyboard">⌨️ 键盘</button>
+        <button class="tool-btn" onclick="sendKey(['command','c'])">📋 复制</button>
+        <button class="tool-btn" onclick="sendKey(['command','v'])">📌 粘贴</button>
+        <button class="tool-btn" onclick="sendKey(['command','z'])">↩️ 撤销</button>
+        <button class="tool-btn" onclick="goHome()">🏠</button>
+        <button class="tool-btn" onclick="resetZoom()" id="btn-zoom">🔍 1x</button>
+    </div>
+
+    <!-- 虚拟键盘 -->
+    <div id="keyboard-panel">
+        <input type="text" id="text-input" placeholder="输入文本后按回车发送..." 
+               autocomplete="off" autocorrect="off" autocapitalize="off">
+        <div class="key-row">
+            <button class="key-btn wide" onclick="sendKey(['escape'])">Esc</button>
+            <button class="key-btn wide" onclick="sendKey(['tab'])">Tab</button>
+            <button class="key-btn wide" onclick="sendKey(['backspace'])">⌫</button>
+            <button class="key-btn wide" onclick="sendKey(['delete'])">Del</button>
+            <button class="key-btn wide" onclick="sendKey(['enter'])">Enter</button>
+        </div>
+        <div class="key-row">
+            <button class="key-btn wide" onclick="sendKey(['command','a'])">⌘A</button>
+            <button class="key-btn wide" onclick="sendKey(['command','c'])">⌘C</button>
+            <button class="key-btn wide" onclick="sendKey(['command','v'])">⌘V</button>
+            <button class="key-btn wide" onclick="sendKey(['command','x'])">⌘X</button>
+            <button class="key-btn wide" onclick="sendKey(['command','s'])">⌘S</button>
+        </div>
+        <div class="key-row">
+            <button class="key-btn" onclick="sendKey(['up'])">↑</button>
+            <button class="key-btn" onclick="sendKey(['down'])">↓</button>
+            <button class="key-btn" onclick="sendKey(['left'])">←</button>
+            <button class="key-btn" onclick="sendKey(['right'])">→</button>
+            <button class="key-btn wide" onclick="sendKey(['space'])">Space</button>
+        </div>
+    </div>
+
+    <!-- JS 模块：加载顺序有依赖关系 -->
+    <script src="/static/js/app.js"></script>     <!-- 核心状态 & 连接 -->
+    <script src="/static/js/ui.js"></script>      <!-- UI 控制 -->
+    <script src="/static/js/touch.js"></script>   <!-- 触摸手势 -->
+</body>
+</html>

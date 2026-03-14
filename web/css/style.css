@@ -1,0 +1,284 @@
+/* ===== 全局基础 ===== */
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: #0a0a0a;
+    color: #fff;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    height: 100vh;
+    width: 100vw;
+}
+
+/* ===== 状态栏 ===== */
+#status-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 36px;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    z-index: 100;
+    font-size: 12px;
+}
+
+#status-bar .status-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #ff3b30;
+    transition: background 0.3s;
+}
+
+#status-dot.connected { background: #30d158; }
+
+#status-text { color: #999; }
+#fps-text { color: #666; }
+
+#status-bar .status-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ===== 工具栏 ===== */
+#toolbar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 50px;
+    background: rgba(0,0,0,0.85);
+    backdrop-filter: blur(10px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 0 12px;
+    z-index: 100;
+}
+
+.tool-btn {
+    height: 36px;
+    padding: 0 16px;
+    border: 1px solid #333;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    transition: all 0.15s;
+}
+
+.tool-btn:active { background: rgba(255,255,255,0.2); transform: scale(0.95); }
+.tool-btn.active { background: #0a84ff; border-color: #0a84ff; }
+
+/* ===== 屏幕容器 ===== */
+#screen-container {
+    position: fixed;
+    top: 36px;
+    left: 0;
+    right: 0;
+    bottom: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+
+#screen-canvas {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    image-rendering: auto;
+    transform-origin: 0 0;
+    transition: none;
+}
+
+/* ===== 模式指示器 ===== */
+#mode-indicator {
+    position: fixed;
+    top: 42px;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 4px 14px;
+    border-radius: 12px;
+    font-size: 11px;
+    z-index: 101;
+    pointer-events: none;
+    transition: opacity 0.3s;
+}
+#mode-indicator.browse { background: rgba(48,209,88,0.25); color: #30d158; }
+#mode-indicator.control { background: rgba(255,59,48,0.25); color: #ff3b30; }
+
+/* ===== 点击反馈涟漪 ===== */
+.click-ripple {
+    position: fixed;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    border: 2px solid rgba(10, 132, 255, 0.8);
+    background: rgba(10, 132, 255, 0.2);
+    pointer-events: none;
+    z-index: 200;
+    animation: ripple 0.4s ease-out forwards;
+}
+
+@keyframes ripple {
+    0% { transform: translate(-50%, -50%) scale(0.5); opacity: 1; }
+    100% { transform: translate(-50%, -50%) scale(2); opacity: 0; }
+}
+
+/* ===== 虚拟键盘面板 ===== */
+#keyboard-panel {
+    position: fixed;
+    bottom: 50px;
+    left: 0;
+    right: 0;
+    background: rgba(20,20,20,0.95);
+    backdrop-filter: blur(10px);
+    padding: 10px;
+    z-index: 90;
+    display: none;
+    border-top: 1px solid #333;
+}
+
+#keyboard-panel.show { display: block; }
+
+#text-input {
+    width: 100%;
+    height: 40px;
+    background: #1c1c1e;
+    border: 1px solid #333;
+    border-radius: 8px;
+    color: #fff;
+    padding: 0 12px;
+    font-size: 16px;
+    outline: none;
+    margin-bottom: 8px;
+}
+
+.key-row {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+    margin-bottom: 4px;
+}
+
+.key-btn {
+    height: 36px;
+    min-width: 36px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 6px;
+    background: #333;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.key-btn:active { background: #555; }
+.key-btn.wide { min-width: 60px; font-size: 11px; }
+
+/* ===== 光标指示器 ===== */
+#cursor-indicator {
+    position: fixed;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 59, 48, 0.9);
+    background: rgba(255, 59, 48, 0.15);
+    pointer-events: none;
+    z-index: 150;
+    transform: translate(-50%, -50%);
+    transition: left 0.06s linear, top 0.06s linear, opacity 0.3s;
+    opacity: 0;
+    box-shadow: 0 0 8px rgba(255, 59, 48, 0.3);
+}
+
+#cursor-indicator.visible { opacity: 1; }
+#cursor-indicator.dragging {
+    border-color: rgba(255, 149, 0, 0.9);
+    background: rgba(255, 149, 0, 0.25);
+    box-shadow: 0 0 12px rgba(255, 149, 0, 0.5);
+    width: 20px;
+    height: 20px;
+}
+
+/* ===== 拖拽状态提示 ===== */
+#drag-indicator {
+    position: fixed;
+    top: 42px;
+    right: 12px;
+    padding: 4px 10px;
+    border-radius: 8px;
+    font-size: 11px;
+    background: rgba(255, 149, 0, 0.3);
+    color: #ff9500;
+    z-index: 101;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+#drag-indicator.active { opacity: 1; }
+
+/* ===== 连接面板 ===== */
+#connect-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.9);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 500;
+}
+
+#connect-overlay.hidden { display: none; }
+
+#connect-overlay h1 {
+    font-size: 28px;
+    margin-bottom: 8px;
+    background: linear-gradient(135deg, #0a84ff, #30d158);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+#connect-overlay p { color: #666; margin-bottom: 24px; font-size: 14px; }
+
+#connect-btn {
+    padding: 12px 40px;
+    border: none;
+    border-radius: 12px;
+    background: #0a84ff;
+    color: #fff;
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+#connect-btn:active { transform: scale(0.95); }
+#connect-btn:disabled { background: #333; color: #666; }
+
+#connect-info { color: #666; font-size: 12px; margin-top: 12px; }
