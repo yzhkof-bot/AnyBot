@@ -295,6 +295,14 @@ function setupTouchEvents() {
         if (state.scrollMode) {
             if (e.touches.length !== 1) return;
             const touch = e.touches[0];
+            // 判断是否真正滑动（超过 5px 阈值才算，避免单击时微小抖动误判）
+            if (touchStartPos) {
+                const totalDx = touch.clientX - touchStartPos.x;
+                const totalDy = touch.clientY - touchStartPos.y;
+                if (Math.abs(totalDx) > 5 || Math.abs(totalDy) > 5) {
+                    isTouchMoved = true;
+                }
+            }
             const deltaY = touch.clientY - scrollStartY;
             const deltaX = touch.clientX - scrollStartX;
             scrollStartY = touch.clientY;
@@ -438,11 +446,22 @@ function setupTouchEvents() {
         e.preventDefault();
         clearTimeout(longPressTimer);
 
-        // 滚轮模式：清理状态
+        // 滚轮模式
         if (state.scrollMode) {
             scrollAccumY = 0;
             scrollAccumX = 0;
             hideScrollIndicator();
+            // 单击（未滑动）→ 退出滚轮模式，进入操作模式，发送点击
+            if (!isTouchMoved && touchStartPos) {
+                state.scrollMode = false;
+                updateScrollModeUI();
+                state.mode = 'control';
+                updateModeUI();
+                if (typeof saveClientState === 'function') saveClientState();
+                const pos = mapToScreen(touchStartPos.x, touchStartPos.y);
+                sendAction({ action: 'click', x: pos.x, y: pos.y });
+                showRipple(touchStartPos.x, touchStartPos.y);
+            }
             return;
         }
 
