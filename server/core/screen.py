@@ -29,6 +29,7 @@ if platform.system() == "Darwin":
             CGWindowListCreateImage,
             CGRectNull,
             kCGWindowListOptionIncludingWindow,
+            kCGWindowListOptionOnScreenAboveWindow,
             kCGWindowImageBoundsIgnoreFraming,
             kCGWindowImageNominalResolution,
             kCGWindowListOptionAll,
@@ -865,12 +866,21 @@ class ScreenCapture:
         if not _HAS_QUARTZ or self._window_id is None:
             return None
 
-        # CGWindowListCreateImage: 截取指定窗口的画面
+        # 用窗口实际 bounds 限定截图范围，避免截入菜单栏等无关区域
+        bounds = self._window_bounds or self._get_window_bounds(self._window_id)
+        if bounds:
+            capture_rect = CoreGraphics.CGRectMake(
+                bounds["x"], bounds["y"], bounds["w"], bounds["h"]
+            )
+        else:
+            capture_rect = CGRectNull
+
+        # CGWindowListCreateImage: 截取指定窗口及其上方窗口（含右键菜单等浮动窗口）
         cg_image = CGWindowListCreateImage(
-            CGRectNull,  # CGRectNull = 自动使用窗口边界
-            kCGWindowListOptionIncludingWindow,
+            capture_rect,
+            kCGWindowListOptionOnScreenAboveWindow | kCGWindowListOptionIncludingWindow,
             self._window_id,
-            kCGWindowImageBoundsIgnoreFraming | kCGWindowImageNominalResolution,
+            kCGWindowImageNominalResolution,
         )
 
         if cg_image is None:
