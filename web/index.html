@@ -77,7 +77,7 @@
 
     <!-- 虚拟键盘 -->
     <div id="keyboard-panel">
-        <input type="text" id="text-input" placeholder="输入文本后按回车发送..." 
+        <input type="text" id="text-input" placeholder="输入即发送..." 
                autocomplete="off" autocorrect="off" autocapitalize="off">
         <div class="key-row">
             <button class="key-btn wide" onclick="sendKey(['escape'])">Esc</button>
@@ -87,11 +87,12 @@
             <button class="key-btn wide" onclick="sendKey(['enter'])">Enter</button>
         </div>
         <div class="key-row">
-            <button class="key-btn wide" onclick="sendKey(['command','a'])">⌘A</button>
+            <button class="key-btn wide" onclick="sendKey(['ctrl','space'])">切换输入法</button>
             <button class="key-btn wide" onclick="sendKey(['command','c'])">⌘C</button>
             <button class="key-btn wide" onclick="sendKey(['command','v'])">⌘V</button>
             <button class="key-btn wide" onclick="sendKey(['command','x'])">⌘X</button>
             <button class="key-btn wide" onclick="sendKey(['command','s'])">⌘S</button>
+            <button class="key-btn wide" onclick="sendKey(['ctrl','c'])">^C</button>
         </div>
         <div class="key-row">
             <button class="key-btn" onclick="sendKey(['up'])">↑</button>

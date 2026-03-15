@@ -75,14 +75,19 @@ document.addEventListener('touchstart', (e) => {
 // ===== 虚拟键盘 =====
 function setupKeyboardInput() {
     const input = document.getElementById('text-input');
+    input.addEventListener('input', () => {
+        const text = input.value;
+        if (text) {
+            sendAction({ action: 'type', text: text });
+            input.value = '';
+        }
+    });
     input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
             e.preventDefault();
-            const text = input.value;
-            if (text) {
-                sendAction({ action: 'type', text: text });
-                input.value = '';
-            }
+            sendKey(['enter']);
+        } else if (e.key === 'Backspace') {
+            sendKey(['backspace']);
         }
     });
 }
