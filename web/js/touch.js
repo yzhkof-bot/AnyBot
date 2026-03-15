@@ -1,6 +1,6 @@
 /**
  * touch.js - 触摸与手势处理模块
- * 浏览模式：单指平移、双指缩放（围绕中心点）、双击切换缩放
+ * 浏览模式：单指平移、双指缩放（围绕中心点）、单击切换操作模式
  * 操作模式：单击、双击、长按右键、双指滚动、单指拖拽
  */
 
@@ -12,7 +12,7 @@ function setupTouchEvents() {
     let longPressTimer = null;
     let isTouchMoved = false;
     let lastTapTime = 0;
-    let _browseSingleTapTimer = null;  // 浏览模式单击延迟（等 300ms 排除双击）
+
 
     // 浏览模式状态
     let panStartView = null;      // 单指拖动开始时的 view 快照
@@ -477,37 +477,15 @@ function setupTouchEvents() {
             if (e.touches.length === 0) {
                 isPinching = false;
 
-                // 双击还原/放大，单击切换到操作模式并发送点击
+                // 单击切换到操作模式并发送点击
                 if (!isTouchMoved) {
-                    const now = Date.now();
-                    const elapsed = now - touchStartTime;
-                    if (elapsed < 300 && now - lastTapTime < 300) {
-                        // 双击：缩放还原/放大
-                        clearTimeout(_browseSingleTapTimer);
-                        if (state.view.scale > 1.1) {
-                            state.view = { scale: 1, translateX: 0, translateY: 0 };
-                        } else {
-                            // 以触摸点为中心放大2x
-                            zoomAroundPoint(2, touchStartPos.x, touchStartPos.y);
-                            clampView();
-                        }
-                        applyTransform();
-                        lastTapTime = 0;
-                    } else {
-                        // 可能是单击，延迟 300ms 确认不是双击后切换到操作模式
-                        lastTapTime = now;
-                        const tapPos = { x: touchStartPos.x, y: touchStartPos.y };
-                        clearTimeout(_browseSingleTapTimer);
-                        _browseSingleTapTimer = setTimeout(() => {
-                            // 确认是单击 → 切换到操作模式并发送点击
-                            state.mode = 'control';
-                            updateModeUI();
-                            if (typeof saveClientState === 'function') saveClientState();
-                            const pos = mapToScreen(tapPos.x, tapPos.y);
-                            sendAction({ action: 'click', x: pos.x, y: pos.y });
-                            showRipple(tapPos.x, tapPos.y);
-                        }, 300);
-                    }
+                    const tapPos = { x: touchStartPos.x, y: touchStartPos.y };
+                    state.mode = 'control';
+                    updateModeUI();
+                    if (typeof saveClientState === 'function') saveClientState();
+                    const pos = mapToScreen(tapPos.x, tapPos.y);
+                    sendAction({ action: 'click', x: pos.x, y: pos.y });
+                    showRipple(tapPos.x, tapPos.y);
                 }
 
                 // 保存当前缩放位置到窗口缓存（在所有 view 修改之后）
