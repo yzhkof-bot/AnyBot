@@ -106,20 +106,21 @@ class ActionExecutor:
         
         策略：
         1. 调用 activate_window() 激活目标窗口
+           （内部已包含 AXRaise → AppleScript → open -a 的多级回退）
         2. 如果刚执行了激活操作，轮询验证窗口确实到达 Z-order 最前
         3. 如果被节流跳过，短暂等待即可（上次激活尚在生效）
         """
         if self.screen._window_id is not None:
             result = self.screen.activate_window()
             if result == "activated":
-                # 刚执行了激活操作，轮询验证窗口到达前台
+                # activate_window 内部已做验证和回退，这里再做一次最终确认
                 import time
-                for _ in range(6):  # 最多等 6 × 30ms = 180ms
+                for _ in range(4):  # 最多等 4 × 30ms = 120ms
                     time.sleep(0.03)
                     if self.screen._is_window_front():
                         break
                 else:
-                    logger.warning(f"窗口 {self.screen._window_id} 激活后仍未到达前台")
+                    logger.warning(f"窗口 {self.screen._window_id} 所有激活方式后仍未到达前台")
             elif result == "throttled":
                 # 节流跳过了激活操作，短暂等待上次激活生效
                 import time

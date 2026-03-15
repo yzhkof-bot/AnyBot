@@ -229,6 +229,9 @@ class InputController:
             needs_shift = False
             if char in keyboardMapping:
                 key_code = keyboardMapping[char]
+                # keyboardMapping 中有些 Shift 字符也有直接映射，需要检查
+                if pyautogui.isShiftCharacter(char):
+                    needs_shift = True
             elif char.lower() in keyboardMapping:
                 key_code = keyboardMapping[char.lower()]
                 needs_shift = True

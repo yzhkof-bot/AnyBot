@@ -481,14 +481,32 @@ class ScreenCapture:
 
             # Step 3: 通过 AXUIElement 精确激活指定窗口
             # AXRaise + AXMain 双管齐下，解决同应用多窗口焦点切换问题
-            raised = self._raise_window_by_ax(target_pid)
+            raised_by = None
+            if self._raise_window_by_ax(target_pid):
+                raised_by = "AXRaise"
+            else:
+                # Step 3b: AX API 失败时（如终端应用返回 err=-25204），
+                # 用 AppleScript + System Events 作为回退
+                if self._raise_window_by_applescript(target_pid):
+                    raised_by = "AppleScript"
+            
+            # Step 4: 验证窗口是否真的到达前台
+            # 某些应用（如 iOA 安全软件）接受 AXRaise 但不实际执行
+            if raised_by:
+                time.sleep(0.03)  # 等窗口 Z-order 更新
+                if not self._is_window_front():
+                    logger.warning(f"AXRaise 报告成功但窗口未到前台，尝试 open -a 回退")
+                    if self._force_activate_by_open():
+                        raised_by = "open -a"
+                    else:
+                        raised_by = None  # 所有方法都失败
             
             self._last_activate_time = time.time()  # 用实际时间（含 sleep）
-            if raised:
+            if raised_by:
                 logger.info(f"激活窗口: [{self._window_owner}] {self._window_name} "
-                           f"(ID={self._window_id}, AXRaise+AXMain 成功)")
+                           f"(ID={self._window_id}, {raised_by} 成功)")
             else:
-                logger.info(f"激活应用: {self._window_owner} (AXRaise 未匹配，回退应用级激活)")
+                logger.info(f"激活应用: {self._window_owner} (AXRaise+AppleScript+open 均未匹配，回退应用级激活)")
             return "activated"
 
         except ImportError:
@@ -497,6 +515,42 @@ class ScreenCapture:
         except Exception as e:
             logger.error(f"激活窗口失败: {e}")
             return "failed"
+
+    def _force_activate_by_open(self) -> bool:
+        """通过 open -a 命令强制激活应用（最终回退方案）
+        
+        某些应用（如 iOA 安全管理软件）接受 AXRaise/AXMain 但不实际
+        改变窗口 Z-order。open -a 通过 macOS Launch Services 路径激活，
+        走的是完全不同的系统调用链，可以绕过这个限制。
+        
+        注意：open -a 只能激活应用（所有窗口），无法精确到某个窗口。
+        对于单窗口应用足够；多窗口场景会把应用的 key window 提前。
+        
+        Returns:
+            True 表示窗口到达前台，False 表示仍然失败
+        """
+        import subprocess
+        
+        owner = self._window_owner
+        if not owner:
+            return False
+        
+        try:
+            subprocess.run(
+                ['open', '-a', owner],
+                capture_output=True, timeout=3
+            )
+            # 等待 open -a 生效
+            for _ in range(6):  # 最多等 180ms
+                time.sleep(0.03)
+                if self._is_window_front():
+                    logger.info(f"open -a {owner!r} 成功激活窗口到前台")
+                    return True
+            logger.warning(f"open -a {owner!r} 后窗口仍未到达前台")
+            return False
+        except Exception as e:
+            logger.warning(f"open -a {owner!r} 失败: {e}")
+            return False
 
     def _raise_window_by_ax(self, pid: int) -> bool:
         """通过 Accessibility API (AXUIElement) 精确提升指定窗口到前台
@@ -612,6 +666,108 @@ class ScreenCapture:
             return False
         except Exception as e:
             logger.error(f"AXRaise 异常: {e}")
+            return False
+
+    def _raise_window_by_applescript(self, pid: int) -> bool:
+        """通过 AppleScript + System Events 精确提升指定窗口到前台
+        
+        作为 AXUIElement API 的回退方案。某些应用（如「终端」）在后台进程
+        （nohup 启动）中通过 AX API 获取 AXWindows 会返回 err=-25204，
+        但 AppleScript 通过 System Events 可以正常操作。
+        
+        匹配策略：通过 CGWindow 的位置+尺寸匹配 System Events 中的窗口，
+        然后执行 perform action "AXRaise" 将其提升到前台。
+        
+        Args:
+            pid: 目标应用的进程 ID
+            
+        Returns:
+            True 表示成功 raise 了目标窗口，False 表示失败
+        """
+        import subprocess
+        
+        try:
+            # 获取目标窗口的位置和尺寸（从 CGWindowList）
+            target_info = None
+            window_list = CGWindowListCopyWindowInfo(
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+                kCGNullWindowID,
+            )
+            for win in window_list:
+                if win.get("kCGWindowNumber", 0) == self._window_id:
+                    bounds = win.get("kCGWindowBounds", {})
+                    target_info = {
+                        "x": int(bounds.get("X", 0)),
+                        "y": int(bounds.get("Y", 0)),
+                        "w": int(bounds.get("Width", 0)),
+                        "h": int(bounds.get("Height", 0)),
+                    }
+                    break
+            
+            if target_info is None:
+                logger.warning(f"AppleScript: CGWindow 中未找到窗口 ID={self._window_id}")
+                return False
+
+            # 通过 System Events 获取进程的窗口列表，按位置+尺寸匹配
+            # AppleScript 用进程名（不是 localizedName），需要通过 PID 获取
+            script = f'''
+                tell application "System Events"
+                    set targetProc to first process whose unix id is {pid}
+                    set procName to name of targetProc
+                    set winList to every window of targetProc
+                    set winCount to count of winList
+                    set matchIdx to 0
+                    repeat with i from 1 to winCount
+                        set w to item i of winList
+                        set wPos to position of w
+                        set wSize to size of w
+                        set wx to item 1 of wPos
+                        set wy to item 2 of wPos
+                        set ww to item 1 of wSize
+                        set wh to item 2 of wSize
+                        -- 位置+尺寸匹配（容差 10px）
+                        if (wx - {target_info["x"]}) > -10 and (wx - {target_info["x"]}) < 10 and ¬
+                           (wy - {target_info["y"]}) > -10 and (wy - {target_info["y"]}) < 10 and ¬
+                           (ww - {target_info["w"]}) > -10 and (ww - {target_info["w"]}) < 10 and ¬
+                           (wh - {target_info["h"]}) > -10 and (wh - {target_info["h"]}) < 10 then
+                            set matchIdx to i
+                            exit repeat
+                        end if
+                    end repeat
+                    if matchIdx > 0 then
+                        perform action "AXRaise" of item matchIdx of winList
+                        return "raised:" & matchIdx & ":" & winCount
+                    else
+                        return "nomatch:" & winCount
+                    end if
+                end tell
+            '''
+            
+            result = subprocess.run(
+                ['osascript', '-e', script],
+                capture_output=True, text=True, timeout=3
+            )
+            
+            output = result.stdout.strip()
+            if result.returncode == 0 and output.startswith("raised:"):
+                parts = output.split(":")
+                logger.info(f"AppleScript AXRaise 成功: 匹配窗口 #{parts[1]}/{parts[2]} "
+                           f"(PID={pid}, 目标位置=({target_info['x']},{target_info['y']}))")
+                return True
+            elif output.startswith("nomatch:"):
+                logger.warning(f"AppleScript: 位置匹配失败, 共 {output.split(':')[1]} 个窗口 "
+                             f"(目标: ({target_info['x']},{target_info['y']}) {target_info['w']}x{target_info['h']})")
+                return False
+            else:
+                logger.warning(f"AppleScript AXRaise 失败: rc={result.returncode}, "
+                             f"stdout={output}, stderr={result.stderr.strip()}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logger.warning("AppleScript AXRaise 超时 (3s)")
+            return False
+        except Exception as e:
+            logger.error(f"AppleScript AXRaise 异常: {e}")
             return False
 
     def _match_ax_window(self, ax_win_infos: list, target_info: dict) -> Optional[dict]:
