@@ -2,6 +2,8 @@
 REST API 端点
 """
 
+import subprocess
+
 from fastapi import APIRouter, Response
 from loguru import logger
 
@@ -108,6 +110,18 @@ async def unpin_window(request: dict):
     
     result = executor.screen.unpin_window(window_id)
     return {"success": result, "pinned_ids": executor.screen.pinned_window_ids}
+
+
+@router.post("/screen/wake")
+async def wake_screen():
+    """唤醒屏幕（熄屏状态下通过 caffeinate 发送用户活动信号）"""
+    try:
+        subprocess.run(["caffeinate", "-u", "-t", "1"], timeout=3)
+        logger.info("屏幕唤醒指令已发送")
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"唤醒屏幕失败: {e}")
+        return {"success": False, "error": str(e)}
 
 
 @router.post("/action", response_model=ActionResult)

@@ -49,6 +49,11 @@ function resetZoom() {
     saveCurrentViewToCache();
 }
 
+// ===== 唤醒屏幕 =====
+function wakeScreen() {
+    fetch('/api/screen/wake', { method: 'POST' });
+}
+
 // ===== 更多菜单 =====
 function toggleMoreMenu() {
     const menu = document.getElementById('more-menu');
