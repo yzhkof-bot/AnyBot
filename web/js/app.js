@@ -165,10 +165,19 @@ async function startWebRTC(host, protocol) {
     });
 
     // 监听连接状态
+    let _disconnectTimer = null;
     pc.addEventListener('connectionstatechange', () => {
         console.log('[WebRTC] 连接状态:', pc.connectionState);
-        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        clearTimeout(_disconnectTimer);
+        if (pc.connectionState === 'failed') {
             handleWebRTCDisconnect();
+        } else if (pc.connectionState === 'disconnected') {
+            // disconnected 可能是暂时的，等 2 秒看是否恢复
+            _disconnectTimer = setTimeout(() => {
+                if (pc.connectionState === 'disconnected') {
+                    handleWebRTCDisconnect();
+                }
+            }, 2000);
         }
     });
 
@@ -337,19 +346,69 @@ function handleDataChannelMessage(data) {
 }
 
 /**
- * WebRTC 断开后自动回退到 MJPEG
+ * WebRTC 断开后尝试重连，重连失败才回退到 MJPEG
  */
-function handleWebRTCDisconnect() {
-    console.warn('[WebRTC] 连接断开，回退到 MJPEG...');
-    cleanupWebRTC();
+let _webrtcReconnecting = false;
 
-    state.streamMode = 'mjpeg';
+function handleWebRTCDisconnect() {
+    if (_webrtcReconnecting) return;  // 防止重复触发
+    console.warn('[WebRTC] 连接断开，尝试重连...');
+    cleanupWebRTC();
+    setStatus(false, '重连中...');
+    reconnectWebRTC();
+}
+
+async function reconnectWebRTC(retries = 3, delay = 1000) {
+    _webrtcReconnecting = true;
     const host = location.host || 'localhost:8765';
+    const protocol = location.protocol === 'https:' ? 'https' : 'http';
+
+    for (let i = 1; i <= retries; i++) {
+        // 页面隐藏时暂停重连，等 visibilitychange 再触发
+        if (document.hidden) {
+            console.log('[WebRTC] 页面不可见，等待恢复后重连');
+            _webrtcReconnecting = false;
+            return;
+        }
+        try {
+            console.log(`[WebRTC] 重连尝试 ${i}/${retries}...`);
+            setStatus(false, `重连中 (${i}/${retries})...`);
+            await startWebRTC(host, protocol);
+            state.streamMode = 'webrtc';
+            setStatus(true, '已连接 (WebRTC)');
+            console.log('[WebRTC] 重连成功');
+            _webrtcReconnecting = false;
+            return;
+        } catch (e) {
+            console.warn(`[WebRTC] 重连失败 (${i}/${retries}):`, e);
+            cleanupWebRTC();
+            if (i < retries) {
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+
+    // 全部失败，回退到 MJPEG
+    console.warn('[WebRTC] 重连全部失败，回退到 MJPEG');
+    state.streamMode = 'mjpeg';
     const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
     connectScreenWs(`${wsProtocol}://${host}/ws/screen`);
     connectControlWs(`${wsProtocol}://${host}/ws/control`);
     setStatus(true, '已连接 (MJPEG回退)');
+    _webrtcReconnecting = false;
 }
+
+// 页面从最小化/后台恢复时，如果 WebRTC 已断开则自动重连
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden || !state.connected) return;
+    if (state.streamMode === 'webrtc' && state.pc && state.pc.connectionState === 'connected') return;
+    // WebRTC 不可用，尝试重连
+    if (!_webrtcReconnecting) {
+        console.log('[AnyBot] 页面恢复可见，WebRTC 已断开，尝试重连...');
+        cleanupWebRTC();
+        reconnectWebRTC();
+    }
+});
 
 /**
  * 清理 WebRTC 资源
