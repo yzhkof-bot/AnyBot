@@ -247,25 +247,18 @@ class InputController:
                 logger.warning(f"无法映射字符: '{char}'，跳过")
                 continue
 
-            if needs_shift:
-                # Shift 按下
-                shift_down = Quartz.CGEventCreateKeyboardEvent(None, keyboardMapping['shift'], True)
-                self._post_keyboard_event(shift_down)
-                time.sleep(0.005)
-
             # 按下
             key_down = Quartz.CGEventCreateKeyboardEvent(None, key_code, True)
+            if needs_shift:
+                Quartz.CGEventSetFlags(key_down, Quartz.kCGEventFlagMaskShift)
             self._post_keyboard_event(key_down)
             time.sleep(0.005)
 
             # 释放
             key_up = Quartz.CGEventCreateKeyboardEvent(None, key_code, False)
-            self._post_keyboard_event(key_up)
-
             if needs_shift:
-                # Shift 释放
-                shift_up = Quartz.CGEventCreateKeyboardEvent(None, keyboardMapping['shift'], False)
-                self._post_keyboard_event(shift_up)
+                Quartz.CGEventSetFlags(key_up, Quartz.kCGEventFlagMaskShift)
+            self._post_keyboard_event(key_up)
 
             time.sleep(0.015)  # 字符间隔
 
