@@ -3,6 +3,16 @@
 macOS 底层调用 Quartz Event (CGEvent)
 """
 
+# --- 修复: Python 3.14 + ARM64 下 rubicon-objc 崩溃 ---
+# mouseinfo 依赖 rubicon-objc, 后者访问 ARM64 上不存在的 objc_msgSendSuper_stret
+# 而 mouseinfo 在本项目中完全不需要, 这里用空模块替换它防止崩溃
+import sys
+import types
+_fake_mouseinfo = types.ModuleType("mouseinfo")
+_fake_mouseinfo._is_fake = True
+sys.modules["mouseinfo"] = _fake_mouseinfo
+# --- 修复结束 ---
+
 import pyautogui
 from loguru import logger
 
@@ -34,16 +44,73 @@ class InputController:
         logger.info(f"输入控制器初始化: 屏幕 {screen_width}x{screen_height}")
 
     def click(self, x: int, y: int, button: str = "left", click_type: str = "single"):
-        """鼠标点击"""
+        """鼠标点击
+        
+        双击/三击使用 Quartz CGEvent 直接实现，通过设置 kCGMouseEventClickState
+        让 macOS 正确识别多次点击。pyautogui.doubleClick 的实现只是循环调用两次
+        独立的 click（clickCount 都为 1），macOS 不会将其识别为双击，
+        导致 Finder 等应用双击无法打开文件夹。
+        """
         x, y = self._clamp(x, y)
         logger.debug(f"点击: ({x}, {y}) button={button} type={click_type}")
 
-        if click_type == "double":
+        if click_type in ("double", "triple") and _HAS_QUARTZ:
+            self._multi_click_quartz(x, y, button, 2 if click_type == "double" else 3)
+        elif click_type == "double":
             pyautogui.doubleClick(x, y, button=button)
         elif click_type == "triple":
             pyautogui.tripleClick(x, y, button=button)
         else:
             pyautogui.click(x, y, button=button)
+
+    def _multi_click_quartz(self, x: int, y: int, button: str, count: int):
+        """使用 Quartz CGEvent 实现多次点击（双击/三击）
+        
+        关键：设置 kCGMouseEventClickState 为递增的点击计数，
+        macOS 通过此字段识别连击序列（而非仅靠时间间隔）。
+        pyautogui 的 doubleClick 不设置此字段，所以 Finder 等应用不响应双击。
+        """
+        import time
+
+        # 按钮类型映射
+        if button == "right":
+            btn = Quartz.kCGMouseButtonRight
+            down_type = Quartz.kCGEventRightMouseDown
+            up_type = Quartz.kCGEventRightMouseUp
+        elif button == "middle":
+            btn = Quartz.kCGMouseButtonCenter
+            down_type = Quartz.kCGEventOtherMouseDown
+            up_type = Quartz.kCGEventOtherMouseUp
+        else:
+            btn = Quartz.kCGMouseButtonLeft
+            down_type = Quartz.kCGEventLeftMouseDown
+            up_type = Quartz.kCGEventLeftMouseUp
+
+        # 先移动鼠标到目标位置
+        move_event = Quartz.CGEventCreateMouseEvent(
+            None, Quartz.kCGEventMouseMoved, (x, y), btn
+        )
+        Quartz.CGEventPost(Quartz.kCGHIDEventTap, move_event)
+
+        # 依次发送 count 次点击，clickState 从 1 递增到 count
+        for click_num in range(1, count + 1):
+            down = Quartz.CGEventCreateMouseEvent(None, down_type, (x, y), btn)
+            Quartz.CGEventSetIntegerValueField(
+                down, Quartz.kCGMouseEventClickState, click_num
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+
+            up = Quartz.CGEventCreateMouseEvent(None, up_type, (x, y), btn)
+            Quartz.CGEventSetIntegerValueField(
+                up, Quartz.kCGMouseEventClickState, click_num
+            )
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+
+            # 点击之间的间隔（不能太长，否则 macOS 不认连击）
+            if click_num < count:
+                time.sleep(0.02)
+
+        logger.debug(f"Quartz 多次点击: ({x},{y}) count={count} button={button}")
 
     def move(self, x: int, y: int, duration: float = 0.0):
         """移动鼠标"""

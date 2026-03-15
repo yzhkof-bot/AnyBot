@@ -20,6 +20,12 @@
         <div class="status-left">
             <div id="status-dot"></div>
             <span id="status-text">未连接</span>
+            <!-- 上传进度（嵌入状态栏） -->
+            <div id="upload-status" class="upload-status" style="display:none">
+                <span id="upload-status-icon"></span>
+                <span id="upload-status-text"></span>
+                <div id="upload-status-bar"><div id="upload-status-fill"></div></div>
+            </div>
         </div>
         <div class="status-right">
             <span id="bw-text"></span>
@@ -53,13 +59,16 @@
 
     <!-- 更多菜单 -->
     <div id="more-menu">
-        <button class="more-menu-item" onclick="sendKey(['command','c']);hideMoreMenu()">📋 复制</button>
-        <button class="more-menu-item" onclick="sendKey(['command','v']);hideMoreMenu()">📌 粘贴</button>
-        <button class="more-menu-item" onclick="sendKey(['command','z']);hideMoreMenu()">↩️ 撤销</button>
-        <button class="more-menu-item" onclick="sendKey(['command','shift','z']);hideMoreMenu()">↪️ 重做</button>
-        <button class="more-menu-item" onclick="goHome();hideMoreMenu()">🏠 Spotlight</button>
-        <button class="more-menu-item" onclick="resetZoom();hideMoreMenu()">🔍 重置缩放</button>
-        <button class="more-menu-item" onclick="wakeScreen();hideMoreMenu()">☀️ 唤醒屏幕</button>
+        <button class="more-menu-item" onclick="sendKey(['command','c']);hideMoreMenu()"><span class="mi-icon">📋</span><span class="mi-label">复制</span></button>
+        <button class="more-menu-item" onclick="sendKey(['command','v']);hideMoreMenu()"><span class="mi-icon">📌</span><span class="mi-label">粘贴</span></button>
+        <button class="more-menu-item" onclick="sendKey(['command','z']);hideMoreMenu()"><span class="mi-icon">↩️</span><span class="mi-label">撤销</span></button>
+        <button class="more-menu-item" onclick="sendKey(['command','shift','z']);hideMoreMenu()"><span class="mi-icon">↪️</span><span class="mi-label">重做</span></button>
+        <button class="more-menu-item" onclick="goHome();hideMoreMenu()"><span class="mi-icon">🏠</span><span class="mi-label">Spotlight</span></button>
+        <button class="more-menu-item" onclick="resetZoom();hideMoreMenu()"><span class="mi-icon">🔍</span><span class="mi-label">重置缩放</span></button>
+        <button class="more-menu-item" onclick="wakeScreen();hideMoreMenu()"><span class="mi-icon">☀️</span><span class="mi-label">唤醒屏幕</span></button>
+        <button class="more-menu-item" onclick="adjustBrightness('up')"><span class="mi-icon">🔆</span><span class="mi-label">亮度+</span></button>
+        <button class="more-menu-item" onclick="adjustBrightness('down')"><span class="mi-icon">🔅</span><span class="mi-label">亮度−</span></button>
+        <button class="more-menu-item" id="btn-upload"><span class="mi-icon">📁</span><span class="mi-label">上传文件</span></button>
     </div>
 
     <!-- 窗口选择弹窗 -->
@@ -103,6 +112,10 @@
             <button class="key-btn wide" onclick="sendKey(['space'])">Space</button>
         </div>
     </div>
+
+    <!-- 文件上传（隐藏 input） -->
+    <input type="file" id="upload-input" multiple
+           style="position:fixed;top:-100px;left:-100px;width:1px;height:1px;opacity:0;">
 
     <!-- JS 模块：加载顺序有依赖关系 -->
     <script src="/static/js/app.js"></script>     <!-- 核心状态 & 连接 -->

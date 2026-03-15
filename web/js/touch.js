@@ -12,6 +12,9 @@ function setupTouchEvents() {
     let longPressTimer = null;
     let isTouchMoved = false;
     let lastTapTime = 0;
+    let pendingClickTimer = null;   // 延迟发送单击的定时器（等待双击判定）
+    let pendingClickPos = null;     // 待发送单击的坐标
+    let pendingClickRipple = null;  // 待发送单击的涟漪位置
 
 
     // 浏览模式状态
@@ -113,6 +116,13 @@ function setupTouchEvents() {
     function enterDragMode(clientX, clientY) {
         isDragging = true;
         lastDragSendTime = Date.now();
+        // 取消挂起的延迟单击（拖拽优先）
+        if (pendingClickTimer) {
+            clearTimeout(pendingClickTimer);
+            pendingClickTimer = null;
+            pendingClickPos = null;
+            pendingClickRipple = null;
+        }
         const pos = mapToScreen(clientX, clientY);
         sendAction({ action: 'drag_start', x: pos.x, y: pos.y });
         showDragIndicator(clientX, clientY);
@@ -235,6 +245,13 @@ function setupTouchEvents() {
                     exitDragMode(touch.clientX, touch.clientY);
                 }
                 clearTimeout(longPressTimer);
+                // 取消挂起的延迟单击
+                if (pendingClickTimer) {
+                    clearTimeout(pendingClickTimer);
+                    pendingClickTimer = null;
+                    pendingClickPos = null;
+                    pendingClickRipple = null;
+                }
                 state.mode = 'browse';
                 updateModeUI();
                 if (typeof saveClientState === 'function') saveClientState();
@@ -278,6 +295,13 @@ function setupTouchEvents() {
             // 按住后移动超过阈值 → 进入拖拽（由 touchmove 处理）
             longPressTimer = setTimeout(() => {
                 if (!isTouchMoved && !isDragging) {
+                    // 取消挂起的延迟单击（长按优先）
+                    if (pendingClickTimer) {
+                        clearTimeout(pendingClickTimer);
+                        pendingClickTimer = null;
+                        pendingClickPos = null;
+                        pendingClickRipple = null;
+                    }
                     const pos = mapToScreen(touch.clientX, touch.clientY);
                     sendAction({ action: 'right_click', x: pos.x, y: pos.y });
                     showRipple(touch.clientX, touch.clientY, '#ff9500');
@@ -514,13 +538,35 @@ function setupTouchEvents() {
         const now = Date.now();
 
         if (now - lastTapTime < 300) {
+            // 300ms 内第二次 tap → 双击
+            // 取消第一次 tap 挂起的延迟单击
+            if (pendingClickTimer) {
+                clearTimeout(pendingClickTimer);
+                pendingClickTimer = null;
+                pendingClickPos = null;
+                pendingClickRipple = null;
+            }
             sendAction({ action: 'double_click', x: pos.x, y: pos.y });
             showRipple(touchStartPos.x, touchStartPos.y, '#30d158');
             lastTapTime = 0;
         } else {
-            sendAction({ action: 'click', x: pos.x, y: pos.y });
-            showRipple(touchStartPos.x, touchStartPos.y);
+            // 第一次 tap → 延迟 300ms 发送单击（等待可能的双击）
             lastTapTime = now;
+            // 先清除之前可能残留的定时器
+            if (pendingClickTimer) {
+                clearTimeout(pendingClickTimer);
+            }
+            pendingClickPos = { x: pos.x, y: pos.y };
+            pendingClickRipple = { x: touchStartPos.x, y: touchStartPos.y };
+            pendingClickTimer = setTimeout(() => {
+                if (pendingClickPos) {
+                    sendAction({ action: 'click', x: pendingClickPos.x, y: pendingClickPos.y });
+                    showRipple(pendingClickRipple.x, pendingClickRipple.y);
+                }
+                pendingClickTimer = null;
+                pendingClickPos = null;
+                pendingClickRipple = null;
+            }, 300);
         }
     }, { passive: false });
 

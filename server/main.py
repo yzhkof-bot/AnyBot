@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from loguru import logger
 
 from .core.screen import ScreenCapture
@@ -42,6 +44,18 @@ webrtc.set_executor(executor)
 app.include_router(rest.router)
 app.include_router(websocket.router)
 app.include_router(webrtc.router)
+
+# 禁止浏览器缓存静态资源（开发阶段确保每次拿到最新文件）
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith("/static") or request.url.path == "/":
+            response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+app.add_middleware(NoCacheMiddleware)
 
 # 静态文件 (手机端 Web 页面)
 web_dir = Path(__file__).parent.parent / "web"

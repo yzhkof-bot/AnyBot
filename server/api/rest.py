@@ -3,8 +3,9 @@ REST API 端点
 """
 
 import subprocess
+from pathlib import Path
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Response, UploadFile, File
 from loguru import logger
 
 from ..core.action_executor import ActionRequest, ActionResult
@@ -124,6 +125,39 @@ async def wake_screen():
         return {"success": False, "error": str(e)}
 
 
+@router.post("/screen/brightness")
+async def adjust_brightness(request: dict):
+    """调节屏幕亮度（通过模拟 NX 媒体按键实现增减）
+
+    Body:
+        {"direction": "up"} 或 {"direction": "down"}
+    """
+    direction = request.get("direction", "up")
+    # NX_KEYTYPE: 2 = brightness up, 3 = brightness down
+    key_type = 2 if direction == "up" else 3
+    try:
+        _send_brightness_key(key_type)
+        logger.info(f"屏幕亮度调节: {direction}")
+        return {"success": True, "direction": direction}
+    except Exception as e:
+        logger.error(f"屏幕亮度调节失败: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def _send_brightness_key(key_type: int):
+    """通过 Quartz NX 媒体按键事件调节屏幕亮度"""
+    import Quartz
+
+    # NX_KEYDOWN = 0xa, NX_KEYUP = 0xb, NX_SUBTYPE_AUX_CONTROL_BUTTON = 8
+    for flag, state in [(0xa00, 0xa), (0xb00, 0xb)]:
+        ev = Quartz.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            14, (0, 0), flag, 0, 0, 0, 8,
+            (key_type << 16) | (state << 8),
+            -1,
+        )
+        Quartz.CGEventPost(0, ev.CGEvent())
+
+
 @router.post("/action", response_model=ActionResult)
 async def execute_action(req: ActionRequest):
     """执行单个操控动作"""
@@ -141,3 +175,109 @@ async def execute_actions(actions: list[ActionRequest]):
         if not result.success:
             break
     return results
+
+
+# ───────── 文件上传 ─────────
+
+# 默认上传目录：用户桌面
+UPLOAD_DIR = Path.home() / "Desktop"
+
+
+@router.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """上传文件到 Mac（保存到桌面），图片自动复制到系统剪切板"""
+    try:
+        filename = file.filename or "unnamed"
+        # 安全处理文件名：去除路径分隔符
+        safe_name = Path(filename).name
+        if not safe_name:
+            safe_name = "unnamed"
+
+        dest = UPLOAD_DIR / safe_name
+
+        # 同名文件自动重命名：file.txt → file (1).txt
+        if dest.exists():
+            stem = dest.stem
+            suffix = dest.suffix
+            counter = 1
+            while dest.exists():
+                dest = UPLOAD_DIR / f"{stem} ({counter}){suffix}"
+                counter += 1
+
+        content = await file.read()
+        dest.write_bytes(content)
+
+        logger.info(f"文件已上传: {dest} ({len(content)} bytes)")
+
+        # 尝试将文件复制到系统剪切板
+        copied = _copy_file_to_clipboard(dest)
+        if copied:
+            logger.info(f"文件已复制到剪切板: {dest}")
+
+        return {
+            "success": True,
+            "filename": dest.name,
+            "path": str(dest),
+            "size": len(content),
+            "copied_to_clipboard": copied,
+        }
+    except Exception as e:
+        logger.error(f"文件上传失败: {e}")
+        return {"success": False, "error": str(e)}
+
+
+def _copy_file_to_clipboard(filepath: Path) -> bool:
+    """将文件复制到 macOS 系统剪切板
+    
+    图片文件：以图片格式写入剪切板（可直接粘贴到聊天窗口、文档等）
+    其他文件：以文件引用方式写入剪切板（可在 Finder 中粘贴）
+    """
+    try:
+        suffix = filepath.suffix.lower()
+        abs_path = str(filepath.resolve())
+        # 转义路径中的特殊字符（双引号、反斜杠）
+        escaped_path = abs_path.replace('\\', '\\\\').replace('"', '\\"')
+
+        # 图片格式：以图片内容写入剪切板
+        image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp'}
+        if suffix in image_extensions:
+            # 使用 osascript 调用 NSPasteboard 写入图片数据
+            script = (
+                'use framework "AppKit"\n'
+                f'set img to (current application\'s NSImage\'s alloc()\'s initWithContentsOfFile:("{escaped_path}"))\n'
+                'if img is not missing value then\n'
+                '    set pb to current application\'s NSPasteboard\'s generalPasteboard()\n'
+                '    pb\'s clearContents()\n'
+                '    pb\'s writeObjects:{img}\n'
+                '    return "ok"\n'
+                'else\n'
+                '    return "fail"\n'
+                'end if'
+            )
+        else:
+            # 非图片文件：以文件引用方式写入剪切板（Finder 可粘贴）
+            script = (
+                'use framework "AppKit"\n'
+                'set pb to current application\'s NSPasteboard\'s generalPasteboard()\n'
+                'pb\'s clearContents()\n'
+                f'set fileURL to current application\'s NSURL\'s fileURLWithPath:"{escaped_path}"\n'
+                'pb\'s writeObjects:{fileURL}\n'
+                'return "ok"'
+            )
+
+        logger.debug(f"剪切板脚本执行: {filepath.name}")
+        result = subprocess.run(
+            ['osascript', '-e', script],
+            capture_output=True, text=True, timeout=10
+        )
+        logger.debug(f"osascript stdout: {result.stdout.strip()}, stderr: {result.stderr.strip()}, rc: {result.returncode}")
+
+        if 'ok' in result.stdout:
+            return True
+        else:
+            logger.warning(f"剪切板写入未成功: stdout={result.stdout.strip()}, stderr={result.stderr.strip()}")
+            return False
+
+    except Exception as e:
+        logger.warning(f"复制到剪切板失败: {e}")
+        return False

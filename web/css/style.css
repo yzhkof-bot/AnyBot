@@ -99,30 +99,51 @@ body {
     background: rgba(30,30,30,0.95);
     backdrop-filter: blur(10px);
     border: 1px solid #444;
-    border-radius: 12px;
-    padding: 6px 0;
+    border-radius: 14px;
+    padding: 10px;
     z-index: 110;
     display: none;
-    min-width: 140px;
+    width: 260px;
 }
 
-#more-menu.show { display: block; }
+#more-menu.show {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+}
 
 .more-menu-item {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 8px;
-    width: 100%;
-    padding: 10px 16px;
+    justify-content: center;
+    gap: 4px;
+    padding: 10px 4px;
     border: none;
     background: none;
     color: #fff;
     font-size: 14px;
     cursor: pointer;
-    text-align: left;
+    border-radius: 10px;
+    text-align: center;
 }
 
 .more-menu-item:active { background: rgba(255,255,255,0.1); }
+
+.mi-icon {
+    font-size: 22px;
+    line-height: 1;
+}
+
+.mi-label {
+    font-size: 11px;
+    color: #bbb;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 56px;
+}
 
 /* ===== 屏幕容器 ===== */
 #screen-container {
@@ -632,4 +653,75 @@ body {
 .window-item.pinned {
     border-color: rgba(255,149,0,0.3);
     background: rgba(255,149,0,0.05);
+}
+
+/* ===== 状态栏内的上传进度 ===== */
+.upload-status {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-left: 6px;
+    padding-left: 8px;
+    border-left: 1px solid #333;
+    transition: opacity 0.3s;
+    max-width: 60vw;
+    overflow: hidden;
+}
+
+#upload-status-icon {
+    flex-shrink: 0;
+    font-size: 12px;
+}
+
+#upload-status-text {
+    font-size: 11px;
+    color: #ccc;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 120px;
+}
+
+#upload-status-bar {
+    width: 48px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.12);
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+#upload-status-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    background: #0a84ff;
+    transition: width 0.2s ease;
+}
+
+/* 上传中 */
+.upload-status.uploading #upload-status-fill {
+    background: #0a84ff;
+}
+
+.upload-status.uploading #upload-status-text {
+    color: #0a84ff;
+}
+
+/* 成功 */
+.upload-status.success #upload-status-fill {
+    background: #30d158;
+}
+
+.upload-status.success #upload-status-text {
+    color: #30d158;
+}
+
+/* 失败 */
+.upload-status.error #upload-status-fill {
+    background: #ff3b30;
+}
+
+.upload-status.error #upload-status-text {
+    color: #ff6961;
 }

@@ -54,6 +54,15 @@ function wakeScreen() {
     fetch('/api/screen/wake', { method: 'POST' });
 }
 
+// ===== 屏幕亮度调节 =====
+function adjustBrightness(direction) {
+    fetch('/api/screen/brightness', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction: direction }),
+    });
+}
+
 // ===== 更多菜单 =====
 function toggleMoreMenu() {
     const menu = document.getElementById('more-menu');
@@ -546,4 +555,229 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ===== 文件上传 =====
+
+/**
+ * 直接触发系统文件选择器
+ * 注意：在 iOS Safari 上，input.click() 必须在用户手势的同步调用链中执行，
+ * 否则浏览器会拦截弹窗。所以这个函数必须在 touchend/click 事件回调中直接调用。
+ */
+function triggerUpload() {
+    const input = document.getElementById('upload-input');
+    if (!input) return;
+    // 重置 input 以允许重复选择同一文件
+    input.value = '';
+    input.click();
+}
+
+/**
+ * 状态栏内的上传进度控制
+ */
+const uploadStatusUI = {
+    _hideTimer: null,
+
+    get el()   { return document.getElementById('upload-status'); },
+    get icon() { return document.getElementById('upload-status-icon'); },
+    get text() { return document.getElementById('upload-status-text'); },
+    get fill() { return document.getElementById('upload-status-fill'); },
+
+    show() {
+        clearTimeout(this._hideTimer);
+        const el = this.el;
+        if (el) el.style.display = 'flex';
+    },
+
+    hide(delay) {
+        clearTimeout(this._hideTimer);
+        this._hideTimer = setTimeout(() => {
+            const el = this.el;
+            if (el) el.style.display = 'none';
+        }, delay || 0);
+    },
+
+    /** 开始上传 */
+    start(filename) {
+        this.show();
+        const el = this.el;
+        if (el) {
+            el.classList.remove('success', 'error');
+            el.classList.add('uploading');
+        }
+        if (this.icon) this.icon.textContent = '⏳';
+        if (this.text) this.text.textContent = shortenName(filename) + ' 上传中...';
+        if (this.fill) this.fill.style.width = '0%';
+    },
+
+    /** 更新进度 0~100 */
+    setProgress(percent, filename) {
+        if (this.text) this.text.textContent = shortenName(filename) + ' ' + percent + '%';
+        if (this.fill) this.fill.style.width = percent + '%';
+    },
+
+    /** 成功 */
+    setSuccess(filename, copiedToClipboard) {
+        this.show();
+        const el = this.el;
+        if (el) {
+            el.classList.remove('uploading', 'error');
+            el.classList.add('success');
+        }
+        if (this.icon) this.icon.textContent = '✅';
+        let msg = shortenName(filename) + ' 已保存';
+        if (copiedToClipboard) msg += ' · 已复制';
+        if (this.text) this.text.textContent = msg;
+        if (this.fill) this.fill.style.width = '100%';
+        this.hide(4000);
+    },
+
+    /** 失败 */
+    setError(filename, errMsg) {
+        this.show();
+        const el = this.el;
+        if (el) {
+            el.classList.remove('uploading', 'success');
+            el.classList.add('error');
+        }
+        if (this.icon) this.icon.textContent = '❌';
+        if (this.text) this.text.textContent = shortenName(filename) + ' ' + (errMsg || '上传失败');
+        if (this.fill) this.fill.style.width = '0%';
+        this.hide(5000);
+    },
+};
+
+/** 截断文件名（状态栏空间有限） */
+function shortenName(name) {
+    if (!name) return '';
+    if (name.length <= 12) return name;
+    const ext = name.lastIndexOf('.') > 0 ? name.slice(name.lastIndexOf('.')) : '';
+    const base = name.slice(0, 12 - ext.length) + '…';
+    return base + ext;
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+/**
+ * 上传多个文件（使用 XMLHttpRequest 获取上传进度）
+ * 进度直接显示在状态栏中
+ */
+function uploadFiles(files) {
+    // 多个文件依次上传（进度条共用状态栏区域）
+    const queue = Array.from(files);
+    let idx = 0;
+
+    function uploadNext() {
+        if (idx >= queue.length) return;
+        const file = queue[idx];
+        idx++;
+
+        uploadStatusUI.start(file.name);
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/upload');
+
+        // 上传进度
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                uploadStatusUI.setProgress(percent, file.name);
+            }
+        });
+
+        // 完成
+        xhr.addEventListener('load', () => {
+            try {
+                const data = JSON.parse(xhr.responseText);
+                if (data.success) {
+                    uploadStatusUI.setSuccess(data.filename, data.copied_to_clipboard);
+                } else {
+                    uploadStatusUI.setError(file.name, data.error || '失败');
+                }
+            } catch {
+                uploadStatusUI.setError(file.name, '响应解析失败');
+            }
+            // 继续下一个
+            uploadNext();
+        });
+
+        // 网络错误
+        xhr.addEventListener('error', () => {
+            uploadStatusUI.setError(file.name, '网络错误');
+            uploadNext();
+        });
+
+        // 超时
+        xhr.addEventListener('timeout', () => {
+            uploadStatusUI.setError(file.name, '超时');
+            uploadNext();
+        });
+
+        xhr.timeout = 120000; // 2 分钟超时
+        xhr.send(formData);
+    }
+
+    uploadNext();
+}
+
+/**
+ * 初始化上传功能
+ * 
+ * 关键：在 iOS Safari 上，必须保证 input.click() 处于用户手势的同步调用栈中。
+ * 因此「上传文件」按钮直接在 touchend 事件里同步调用 triggerUpload()，
+ * 而不是通过 onclick → hideMoreMenu 之后异步调用（那样会被浏览器拦截）。
+ */
+function setupUpload() {
+    const input = document.getElementById('upload-input');
+    if (!input) return;
+
+    // 监听文件选择
+    input.addEventListener('change', () => {
+        if (input.files.length > 0) {
+            uploadFiles(input.files);
+        }
+    });
+
+    // 「上传文件」按钮 — 用 touchend 事件直接触发（iOS 兼容）
+    const uploadBtn = document.getElementById('btn-upload');
+    if (uploadBtn) {
+        // 移动端：touchend 中同步触发文件选择器，确保用户手势链不被打断
+        uploadBtn.addEventListener('touchend', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            // 必须先触发 input.click()（同步），再隐藏菜单
+            triggerUpload();
+            hideMoreMenu();
+        }, { passive: false });
+
+        // 桌面端兼容：用 click 事件
+        uploadBtn.addEventListener('click', (e) => {
+            // 如果已经被 touchend 处理过，跳过
+            if (e.target._touchHandled) {
+                e.target._touchHandled = false;
+                return;
+            }
+            triggerUpload();
+            hideMoreMenu();
+        });
+
+        // 标记 touchend 已处理（防止 click 重复触发）
+        uploadBtn.addEventListener('touchstart', () => {
+            uploadBtn._touchHandled = true;
+        }, { passive: true });
+    }
+}
+
+// 初始化上传功能
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setupUpload);
+} else {
+    setupUpload();
 }

@@ -3,9 +3,10 @@
 
 import uvicorn
 
+
 if __name__ == "__main__":
     print("🤖 AnyBot 启动中...")
-    print("📱 手机浏览器访问: http://<你的Mac IP>:9765")
+    print("📱 局域网访问: http://<你的Mac IP>:9765")
     print("📖 API 文档: http://localhost:9765/docs")
     print()
 

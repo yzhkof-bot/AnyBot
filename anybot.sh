@@ -8,6 +8,7 @@ set -e
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_PYTHON="$PROJECT_DIR/.venv/bin/python3"
 PID_FILE="$PROJECT_DIR/.anybot.pid"
+CAFFEINATE_PID_FILE="$PROJECT_DIR/.anybot_caffeinate.pid"
 LOG_FILE="$PROJECT_DIR/anybot.log"
 PORT=9765
 
@@ -17,7 +18,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# 获取本机 IP（macOS）
+# 获取本机局域网 IP（macOS）
 get_local_ip() {
     ipconfig getifaddr en0 2>/dev/null || echo "localhost"
 }
@@ -77,13 +78,17 @@ start() {
     local pid=$!
     echo $pid > "$PID_FILE"
 
+    # 启动 caffeinate 阻止系统睡眠（含合盖），随 AnyBot 进程自动退出
+    caffeinate -dims -w $pid &
+    echo $! > "$CAFFEINATE_PID_FILE"
+
     # 等待服务就绪
     echo -n "   等待服务就绪"
     for i in $(seq 1 15); do
         if curl -s "http://localhost:$PORT/api/screen-info" >/dev/null 2>&1; then
             echo ""
             echo -e "${GREEN}✅ AnyBot 已启动 (PID: $pid)${NC}"
-            echo -e "   📱 手机访问: ${GREEN}http://$ip:$PORT${NC}"
+            echo -e "   📱 局域网访问: ${GREEN}http://$ip:$PORT${NC}"
             echo -e "   📖 API 文档: http://localhost:$PORT/docs"
             echo -e "   📋 日志文件: $LOG_FILE"
             return 0
@@ -113,6 +118,14 @@ stop() {
     local pid
     pid=$(get_pid)
     echo -e "${YELLOW}🛑 正在停止 AnyBot (PID: $pid)...${NC}"
+
+    # 停止 caffeinate 防睡眠进程
+    if [ -f "$CAFFEINATE_PID_FILE" ]; then
+        local caf_pid
+        caf_pid=$(cat "$CAFFEINATE_PID_FILE")
+        kill "$caf_pid" 2>/dev/null || true
+        rm -f "$CAFFEINATE_PID_FILE"
+    fi
 
     # 优雅关闭（SIGTERM）
     kill "$pid" 2>/dev/null
@@ -153,7 +166,7 @@ status() {
         echo -e "${GREEN}✅ AnyBot 正在运行${NC}"
         echo -e "   PID: $pid"
         echo -e "   端口: $PORT"
-        echo -e "   📱 手机访问: http://$(get_local_ip):$PORT"
+        echo -e "   📱 局域网访问: http://$(get_local_ip):$PORT"
 
         # 检查 WebRTC 状态
         local webrtc_status
