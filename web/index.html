@@ -54,6 +54,7 @@
         <button class="tool-btn" onclick="toggleKeyboard()" id="btn-keyboard">⌨️ 键盘</button>
         <button class="tool-btn" onclick="toggleScrollMode()" id="btn-scroll">🖱 滚轮</button>
         <button class="tool-btn" onclick="showWindowPicker()" id="btn-window">🪟 窗口</button>
+        <button class="tool-btn" onclick="toggleAgentPanel()" id="btn-agent">🤖 Agent</button>
         <button class="tool-btn" onclick="toggleMoreMenu()" id="btn-more">⋯ 更多</button>
     </div>
 
@@ -113,6 +114,52 @@
         </div>
     </div>
 
+    <!-- Agent 聊天面板 -->
+    <div id="agent-overlay" onclick="if(event.target===this)closeAgentPanel()">
+        <div id="agent-panel">
+            <!-- 顶栏 -->
+            <div id="agent-header">
+                <div class="agent-header-left">
+                    <span id="agent-status-dot" class="agent-status-dot idle"></span>
+                    <span class="agent-title">AnyBot Agent</span>
+                    <span id="agent-status-text" class="agent-status-label">空闲</span>
+                </div>
+                <button id="agent-close-btn" onclick="closeAgentPanel()">✕</button>
+            </div>
+            <!-- 模型选择栏 -->
+            <div id="agent-model-bar">
+                <span class="agent-model-label">模型</span>
+                <select id="agent-model-select" onchange="onModelChange(this.value)">
+                    <option value="" disabled>加载中...</option>
+                </select>
+            </div>
+            <!-- 消息列表 -->
+            <div id="agent-messages">
+                <div class="agent-msg agent-msg-system">
+                    <div class="agent-msg-system welcome">🤖 你好！描述你想完成的任务，AI 会自动操控电脑帮你执行。</div>
+                </div>
+            </div>
+            <!-- 控制栏（运行时显示） -->
+            <div id="agent-controls" style="display:none">
+                <button class="agent-ctrl-btn pause" onclick="pauseAgent()" title="暂停">⏸ 暂停</button>
+                <button class="agent-ctrl-btn resume" onclick="resumeAgent()" title="恢复">▶ 恢复</button>
+                <button class="agent-ctrl-btn stop" onclick="stopAgent()" title="停止">⏹ 停止</button>
+            </div>
+            <!-- 输入栏 -->
+            <div id="agent-input-bar">
+                <input type="text" id="agent-input"
+                       placeholder="输入任务，让 AI 帮你操作..."
+                       autocomplete="off" autocorrect="off" autocapitalize="off">
+                <button id="agent-send-btn" onclick="sendAgentMessage()">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <path d="M22 2L11 13" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- 文件上传（隐藏 input） -->
     <input type="file" id="upload-input" multiple
            style="position:fixed;top:-100px;left:-100px;width:1px;height:1px;opacity:0;">
@@ -121,5 +168,6 @@
     <script src="/static/js/app.js"></script>     <!-- 核心状态 & 连接 -->
     <script src="/static/js/ui.js"></script>      <!-- UI 控制 -->
     <script src="/static/js/touch.js"></script>   <!-- 触摸手势 -->
+    <script src="/static/js/agent-panel.js"></script> <!-- AI Agent 聊天面板 -->
 </body>
 </html>

@@ -1,0 +1,5 @@
+{
+  "api_key": "your-api-key-here",
+  "base_url": "https://api.anthropic.com",
+  "model": "claude-sonnet-4-20250514"
+}

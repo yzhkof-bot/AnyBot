@@ -4,8 +4,9 @@ REST API 端点
 
 import subprocess
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, Response, UploadFile, File
+from fastapi import APIRouter, Response, UploadFile, File, Query
 from loguru import logger
 
 from ..core.action_executor import ActionRequest, ActionResult
@@ -22,16 +23,34 @@ def set_executor(exec_instance):
 
 
 @router.get("/screenshot")
-async def get_screenshot():
-    """获取当前屏幕截图"""
-    jpeg_bytes = executor.screen.capture_jpeg(quality=70)
+async def get_screenshot(mode: Optional[str] = Query(None, description="截图模式: fullscreen=强制全屏, 不传=跟随当前模式")):
+    """获取当前屏幕截图
+    
+    Query Params:
+        mode: fullscreen | (空)
+            - fullscreen: 始终截全屏，不受窗口模式影响
+            - 不传: 跟随当前模式（窗口模式截窗口，全屏模式截全屏）
+    """
+    if mode == "fullscreen":
+        jpeg_bytes = executor.screen.capture_fullscreen_jpeg(quality=70)
+    else:
+        jpeg_bytes = executor.screen.capture_jpeg(quality=70)
     return Response(content=jpeg_bytes, media_type="image/jpeg")
 
 
 @router.get("/screenshot/base64")
-async def get_screenshot_base64():
-    """获取 base64 编码的屏幕截图（供 AI Agent 使用）"""
-    b64 = executor.screen.capture_base64(quality=70)
+async def get_screenshot_base64(mode: Optional[str] = Query(None, description="截图模式: fullscreen=强制全屏, 不传=跟随当前模式")):
+    """获取 base64 编码的屏幕截图
+    
+    Query Params:
+        mode: fullscreen | (空)
+            - fullscreen: 始终截全屏，不受窗口模式影响
+            - 不传: 跟随当前模式
+    """
+    if mode == "fullscreen":
+        b64 = executor.screen.capture_fullscreen_base64(quality=70)
+    else:
+        b64 = executor.screen.capture_base64(quality=70)
     return {"image_base64": b64}
 
 

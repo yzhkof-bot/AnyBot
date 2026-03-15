@@ -73,6 +73,17 @@ start() {
     echo -e "${GREEN}🤖 AnyBot 启动中...${NC}"
     cd "$PROJECT_DIR"
 
+    # AI Agent 配置：从项目根目录的 config.json 读取
+    # 也可以通过环境变量覆盖：
+    #   export ANYBOT_API_KEY=your-key
+    #   export ANYBOT_BASE_URL=https://your-proxy.com  （可选，代理地址）
+    #   export ANYBOT_MODEL=claude-sonnet-4-20250514    （可选，模型名）
+    if [ -f "$PROJECT_DIR/config.json" ]; then
+        echo -e "   ${GREEN}✓${NC} 检测到 config.json，AI Agent 将使用该配置"
+    else
+        echo -e "   ${YELLOW}⚠️${NC} 未找到 config.json，请复制 config.example.json 并填入 API Key"
+    fi
+
     # 后台启动，日志写入文件
     nohup "$VENV_PYTHON" run.py > "$LOG_FILE" 2>&1 &
     local pid=$!

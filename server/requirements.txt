@@ -11,3 +11,7 @@ pydantic>=2.0
 loguru>=0.7.0
 # macOS Accessibility API (AXUIElement) — 窗口焦点精确切换
 pyobjc-framework-ApplicationServices>=10.0; sys_platform == "darwin"
+# AI Agent — 纯 HTTP 调用 Anthropic Messages API，不依赖 SDK
+# anthropic>=0.39.0  # 不需要，已用 urllib 直接调用
+# MCP Server — 供外部工具调用
+mcp>=1.0.0

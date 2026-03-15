@@ -907,10 +907,22 @@ class ScreenCapture:
         )
         return img.convert("RGB")
 
+    def capture_fullscreen_raw(self) -> Image.Image:
+        """始终截取全屏，不受窗口模式影响
+        
+        Agent 使用此方法截图，确保总是能看到完整桌面。
+        """
+        monitor = self._sct.monitors[self.monitor_index]
+        sct_img = self._sct.grab(monitor)
+        # mss 返回 BGRA，转为 RGB
+        img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+        return img
+
     def capture_raw(self) -> Image.Image:
         """捕获原始屏幕图像，返回 PIL Image
         
-        窗口模式下截取指定窗口，全屏模式下截取整个屏幕
+        窗口模式下截取指定窗口，全屏模式下截取整个屏幕。
+        注意：Agent 不应使用此方法，应使用 capture_fullscreen_raw() 确保总是全屏。
         """
         if self._window_id is not None:
             img = self._capture_window()
@@ -956,8 +968,53 @@ class ScreenCapture:
         return buf.getvalue()
 
     def capture_base64(self, quality: Optional[int] = None, max_size: Optional[Tuple[int, int]] = None) -> str:
-        """捕获屏幕并返回 base64 编码的 JPEG（供 AI Agent 使用）"""
+        """捕获屏幕并返回 base64 编码的 JPEG（跟随窗口模式）"""
         jpeg_bytes = self.capture_jpeg(quality=quality, max_size=max_size)
+        return base64.b64encode(jpeg_bytes).decode("utf-8")
+
+    def capture_fullscreen_jpeg(self, quality: Optional[int] = None, max_size: Optional[Tuple[int, int]] = None) -> bytes:
+        """始终截取全屏并返回 JPEG bytes，不受窗口模式影响"""
+        quality = quality or self.quality
+        max_size = max_size or self.max_size
+
+        img = self.capture_fullscreen_raw()
+
+        # 按比例缩放
+        if max_size:
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+
+    def capture_fullscreen_base64(self, quality: Optional[int] = None, max_size: Optional[Tuple[int, int]] = None) -> str:
+        """始终截取全屏并返回 base64 编码的 JPEG，不受窗口模式影响
+        
+        Agent 应使用此方法，确保总能看到完整桌面进行决策。
+        """
+        jpeg_bytes = self.capture_fullscreen_jpeg(quality=quality, max_size=max_size)
+        return base64.b64encode(jpeg_bytes).decode("utf-8")
+
+    def capture_window_jpeg(self, quality: Optional[int] = None, max_size: Optional[Tuple[int, int]] = None) -> Optional[bytes]:
+        """仅截取当前窗口模式下的窗口，如果不在窗口模式则返回 None"""
+        if self._window_id is None:
+            return None
+        img = self._capture_window()
+        if img is None:
+            return None
+        quality = quality or self.quality
+        max_size = max_size or self.max_size
+        if max_size:
+            img.thumbnail(max_size, Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        return buf.getvalue()
+
+    def capture_window_base64(self, quality: Optional[int] = None, max_size: Optional[Tuple[int, int]] = None) -> Optional[str]:
+        """仅截取当前窗口模式下的窗口，返回 base64，如果不在窗口模式则返回 None"""
+        jpeg_bytes = self.capture_window_jpeg(quality=quality, max_size=max_size)
+        if jpeg_bytes is None:
+            return None
         return base64.b64encode(jpeg_bytes).decode("utf-8")
 
     def benchmark(self, frames: int = 30) -> dict:

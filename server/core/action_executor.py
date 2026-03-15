@@ -126,6 +126,30 @@ class ActionExecutor:
                 import time
                 time.sleep(0.03)
 
+    def _clamp_coords(self, x: int, y: int) -> tuple:
+        """将绝对坐标裁剪到屏幕可见范围内（不做窗口偏移）
+        
+        Agent 传入的已经是物理屏幕绝对坐标，
+        只需要做边界裁剪，不需要加窗口偏移。
+        """
+        screen_w, screen_h = self.screen.physical_screen_size
+        clamped = False
+        if x < 0:
+            x = 0
+            clamped = True
+        elif x >= screen_w:
+            x = screen_w - 1
+            clamped = True
+        if y < 0:
+            y = 0
+            clamped = True
+        elif y >= screen_h:
+            y = screen_h - 1
+            clamped = True
+        if clamped:
+            logger.debug(f"坐标裁剪到屏幕范围: → ({x},{y})")
+        return (x, y)
+
     def execute(self, req: ActionRequest) -> ActionResult:
         """执行一个操控动作"""
         try:
@@ -218,4 +242,77 @@ class ActionExecutor:
 
         except Exception as e:
             logger.error(f"动作执行失败: {e}")
+            return ActionResult(success=False, action=req.action.value, error=str(e))
+
+    def execute_absolute(self, req: ActionRequest) -> ActionResult:
+        """执行操控动作 — 使用物理屏幕绝对坐标（Agent 专用）
+        
+        与 execute() 的区别：
+        - 不经过 _map_coords（不加窗口偏移）
+        - 只做屏幕边界裁剪
+        - 不执行 _ensure_window_active（Agent 操控的是整个桌面）
+        
+        Agent 截取全屏截图，AI 返回的坐标经过 _scale_coord 后
+        已经是物理屏幕绝对坐标，不需要再叠加窗口偏移。
+        """
+        try:
+            logger.debug(f"执行动作(absolute): {req.action.value}")
+
+            if req.action == ActionType.SCREENSHOT:
+                b64 = self.screen.capture_base64()
+                return ActionResult(action="screenshot", data={"image_base64": b64})
+
+            elif req.action == ActionType.CLICK:
+                ax, ay = self._clamp_coords(req.x, req.y)
+                self.input_ctrl.click(ax, ay, button=req.button, click_type="single")
+                return ActionResult(action="click", data={"x": ax, "y": ay})
+
+            elif req.action == ActionType.DOUBLE_CLICK:
+                ax, ay = self._clamp_coords(req.x, req.y)
+                self.input_ctrl.click(ax, ay, button="left", click_type="double")
+                return ActionResult(action="double_click", data={"x": ax, "y": ay})
+
+            elif req.action == ActionType.RIGHT_CLICK:
+                ax, ay = self._clamp_coords(req.x, req.y)
+                self.input_ctrl.click(ax, ay, button="right", click_type="single")
+                return ActionResult(action="right_click", data={"x": ax, "y": ay})
+
+            elif req.action == ActionType.MOVE:
+                ax, ay = self._clamp_coords(req.x, req.y)
+                self.input_ctrl.move(ax, ay, duration=req.duration)
+                return ActionResult(action="move", data={"x": ax, "y": ay})
+
+            elif req.action == ActionType.DRAG:
+                ax, ay = self._clamp_coords(req.x, req.y)
+                aex, aey = self._clamp_coords(req.end_x, req.end_y)
+                self.input_ctrl.drag(ax, ay, aex, aey, duration=req.duration or 0.3)
+                return ActionResult(action="drag", data={"x": ax, "y": ay, "end_x": aex, "end_y": aey})
+
+            elif req.action == ActionType.SCROLL:
+                ax, ay = self._clamp_coords(req.x, req.y)
+                self.input_ctrl.scroll(ax, ay, direction=req.direction, amount=req.amount)
+                return ActionResult(action="scroll")
+
+            elif req.action == ActionType.TYPE:
+                self.input_ctrl.type_text(req.text)
+                return ActionResult(action="type")
+
+            elif req.action == ActionType.KEY:
+                self.input_ctrl.key(req.keys)
+                return ActionResult(action="key", data={"keys": req.keys})
+
+            elif req.action == ActionType.CURSOR_POSITION:
+                pos = self.input_ctrl.get_cursor_position()
+                return ActionResult(action="cursor_position", data=pos)
+
+            elif req.action == ActionType.WAIT:
+                import time
+                time.sleep(req.duration or 1.0)
+                return ActionResult(action="wait")
+
+            else:
+                return ActionResult(success=False, error=f"未知动作: {req.action}")
+
+        except Exception as e:
+            logger.error(f"动作执行失败(absolute): {e}")
             return ActionResult(success=False, action=req.action.value, error=str(e))

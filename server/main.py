@@ -18,10 +18,36 @@ from .core.input_control import InputController
 from .core.action_executor import ActionExecutor
 from .api import rest, websocket
 from .stream import webrtc
+from .agent import chat_api as agent_chat
 
 # 日志配置
+_LOG_DIR = Path(__file__).parent.parent / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+
 logger.remove()
+# 终端输出（保留原有格式）
 logger.add(sys.stderr, level="DEBUG", format="<green>{time:HH:mm:ss}</green> | <level>{level:7s}</level> | {message}")
+# 文件日志 — 按天轮转，保留 7 天，方便排查问题
+logger.add(
+    str(_LOG_DIR / "anybot_{time:YYYY-MM-DD}.log"),
+    level="DEBUG",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:7s} | {name}:{function}:{line} | {message}",
+    rotation="00:00",      # 每天零点轮转
+    retention="7 days",    # 保留 7 天
+    encoding="utf-8",
+    enqueue=True,          # 线程安全异步写入
+)
+# Agent 专用日志 — 单独文件，记录聊天和操控详情
+logger.add(
+    str(_LOG_DIR / "agent_{time:YYYY-MM-DD}.log"),
+    level="DEBUG",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:7s} | {message}",
+    rotation="00:00",
+    retention="7 days",
+    encoding="utf-8",
+    enqueue=True,
+    filter=lambda record: record["extra"].get("agent", False),
+)
 
 # FastAPI 应用
 app = FastAPI(
@@ -39,11 +65,13 @@ executor = ActionExecutor(screen, input_ctrl)
 rest.set_executor(executor)
 websocket.set_executor(executor)
 webrtc.set_executor(executor)
+agent_chat.set_executor(executor)
 
 # 注册路由
 app.include_router(rest.router)
 app.include_router(websocket.router)
 app.include_router(webrtc.router)
+app.include_router(agent_chat.router)
 
 # 禁止浏览器缓存静态资源（开发阶段确保每次拿到最新文件）
 class NoCacheMiddleware(BaseHTTPMiddleware):
