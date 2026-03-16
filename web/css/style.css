@@ -438,6 +438,39 @@ body {
 
 #connect-info { color: #666; font-size: 12px; margin-top: 12px; }
 
+/* 传输模式选择 */
+#connect-mode-select {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 20px;
+    text-align: left;
+}
+
+#connect-mode-select label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: #aaa;
+    cursor: pointer;
+    padding: 8px 14px;
+    border-radius: 8px;
+    border: 1px solid #333;
+    background: rgba(255,255,255,0.03);
+    transition: all 0.15s;
+}
+
+#connect-mode-select label:has(input:checked) {
+    border-color: #0a84ff;
+    background: rgba(10,132,255,0.1);
+    color: #fff;
+}
+
+#connect-mode-select input[type="radio"] {
+    accent-color: #0a84ff;
+}
+
 /* ===== 窗口选择弹窗 ===== */
 #window-picker-overlay {
     position: fixed;
@@ -917,6 +950,8 @@ body {
     padding: 12px 14px;
     display: flex;
     flex-direction: column;
+    -webkit-user-select: text;
+    user-select: text;
     gap: 8px;
 }
 

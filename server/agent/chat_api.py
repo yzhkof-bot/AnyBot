@@ -28,16 +28,102 @@ REST API：
 
 import asyncio
 import json
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from ..core.action_executor import ActionExecutor
 from .anthropic_adapter import AnthropicComputerUseAdapter, get_available_models, get_model_info, DEFAULT_MODEL_ID
-from .base import AgentState
+from .openai_adapter import OpenAICompatAdapter
+from .base import AgentSession, AgentState
 
 # Agent 专用日志器
 agent_log = logger.bind(agent=True)
+
+# ───────── Agent 会话日志管理 ─────────
+_LOG_DIR = Path(__file__).parent.parent.parent / "logs"
+_AGENT_LOG_KEEP = 5        # 保留最近 N 次聊天的日志
+_current_log_id = None      # 当前 logger handler id
+
+
+def _cleanup_old_agent_logs():
+    """只保留最近 _AGENT_LOG_KEEP 个 agent 会话日志文件，并清理旧格式日志"""
+    # 清理旧的按天轮转格式日志（agent_YYYY-MM-DD.log）
+    for old_daily in _LOG_DIR.glob("agent_2*.log"):
+        if "session" not in old_daily.name:
+            try:
+                old_daily.unlink()
+                logger.debug(f"已清理旧格式 Agent 日志: {old_daily.name}")
+            except OSError:
+                pass
+
+    # 只保留最近 N 个会话日志
+    logs = sorted(_LOG_DIR.glob("agent_session_*.log"), key=lambda p: p.stat().st_mtime)
+    while len(logs) > _AGENT_LOG_KEEP:
+        old = logs.pop(0)
+        try:
+            old.unlink()
+            logger.debug(f"已清理旧 Agent 日志: {old.name}")
+        except OSError:
+            pass
+
+
+def start_agent_session_log():
+    """为新的聊天会话创建独立日志文件，并清理旧日志"""
+    global _current_log_id
+
+    # 移除上一个会话的 handler
+    if _current_log_id is not None:
+        try:
+            logger.remove(_current_log_id)
+        except ValueError:
+            pass
+
+    _LOG_DIR.mkdir(exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = _LOG_DIR / f"agent_session_{ts}.log"
+
+    _current_log_id = logger.add(
+        str(log_path),
+        level="DEBUG",
+        format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:7s} | {message}",
+        encoding="utf-8",
+        enqueue=True,
+        filter=lambda record: record["extra"].get("agent", False),
+    )
+
+    _cleanup_old_agent_logs()
+
+
+def _create_session(
+    executor: ActionExecutor,
+    on_event,
+    model_id: str,
+) -> AgentSession:
+    """根据模型 provider 创建对应的适配器 session
+    
+    Anthropic 模型 → AnthropicComputerUseAdapter（/v1/messages 格式）
+    其他模型 → OpenAICompatAdapter（/v1/chat/completions 格式）
+    """
+    model_info = get_model_info(model_id)
+    provider = (model_info or {}).get("provider", "").lower()
+
+    if provider == "anthropic":
+        agent_log.info(f"[路由] 模型 {model_id} → Anthropic 适配器")
+        return AnthropicComputerUseAdapter(
+            executor=executor,
+            on_event=on_event,
+            model_id=model_id,
+        )
+    else:
+        agent_log.info(f"[路由] 模型 {model_id} (provider={provider}) → OpenAI 兼容适配器")
+        return OpenAICompatAdapter(
+            executor=executor,
+            on_event=on_event,
+            model_id=model_id,
+        )
 
 router = APIRouter(tags=["agent"])
 
@@ -132,7 +218,10 @@ async def agent_websocket(ws: WebSocket):
                     })
                     continue
 
-                session = AnthropicComputerUseAdapter(
+                # 为本次聊天创建独立日志文件
+                start_agent_session_log()
+
+                session = _create_session(
                     executor=executor,
                     on_event=on_event,
                     model_id=msg.get("model") or ws_model_id,
@@ -154,7 +243,7 @@ async def agent_websocket(ws: WebSocket):
                 session._task = agent_task
 
                 # 监听任务完成（异步通知）
-                async def _watch_task(task: asyncio.Task, sess: AnthropicComputerUseAdapter):
+                async def _watch_task(task: asyncio.Task, sess: AgentSession):
                     try:
                         await task
                     except asyncio.CancelledError:

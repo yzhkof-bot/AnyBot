@@ -310,50 +310,67 @@ class AnthropicComputerUseAdapter(AgentSession):
     MAX_TOKENS = 4096
 
     # 系统提示词（动态拼接截图尺寸）
-    SYSTEM_PROMPT_TEMPLATE = """你是一个 AI 助手，正在通过 computer 工具操控一台 Mac 电脑。
-你可以看到屏幕截图，并通过 computer 工具执行鼠标点击、键盘输入等操作来完成用户的任务。
+    SYSTEM_PROMPT_TEMPLATE = """你是一个 AI 助手，正在通过 computer 和 accessibility 工具操控一台 Mac 电脑。
 
-截图尺寸: {image_width} x {image_height}
-所有坐标都基于截图像素，范围 x:[0, {image_width}], y:[0, {image_height}]
-截图的顶部和左侧有坐标刻度尺（每 100 像素标注一次），帮助你判断元素位置。
+屏幕尺寸: {image_width} x {image_height}
+所有坐标都基于屏幕像素，范围 x:[0, {image_width}], y:[0, {image_height}]
 
-可用操作（通过 computer 工具的 action 参数）：
-- screenshot: 获取当前屏幕截图
-- click: 点击指定坐标，参数 coordinate=[x, y]
-- double_click: 双击指定坐标，参数 coordinate=[x, y]
-- right_click: 右键点击指定坐标，参数 coordinate=[x, y]
-- type: 输入文本，参数 text="要输入的内容"
-- key: 按键/快捷键，参数 text="ctrl+c" 或 "Return"
-- scroll: 滚动，参数 coordinate=[x, y], direction="up"|"down"|"left"|"right", amount=3
-- mouse_move: 移动鼠标，参数 coordinate=[x, y]
-- drag: 拖拽，参数 start_coordinate=[x, y], end_coordinate=[x, y]
-- wait: 等待，参数 duration=2.0
+## 可用工具
 
-## 精确点击指南
+你有以下工具可用，每次循环可以根据任务需要自由选择最合适的工具，所有工具的使用权重是相同的。
 
-坐标 coordinate=[x, y] 对应你看到的截图中的像素位置。定位目标元素时：
-1. 找到目标 UI 元素在截图中的位置
-2. 参考顶部 X 轴和左侧 Y 轴的刻度尺来确认坐标
-3. 点击目标元素的中心而不是边缘
+### accessibility 工具（UI 控件树）
+获取全屏 UI 控件树，覆盖屏幕上所有可交互区域，包含四个部分：
+1. **前台应用**：当前前台应用的完整窗口和控件
+2. **其他可见应用**：屏幕上其他可见窗口的应用（如微信、终端、Finder 等），按 z-order 排列
+3. **系统菜单栏**：顶部菜单栏（应用菜单 + 右侧状态栏如 WiFi/电池/时钟）
+4. **Dock 栏**：底部 Dock 上的所有应用图标
 
-注意事项：
-- 如果用户的消息中没有附带截图，说明该任务可能不需要操控屏幕。如果你确实需要看屏幕才能完成任务，请先使用 screenshot 动作获取截图
-- 对于纯聊天、问答类问题（如"你好"、"解释一下xx"），直接文字回复即可，不需要截图或操控屏幕
-- 每次操作后你会收到最新的屏幕截图，据此决定下一步操作
-- 执行操作前先仔细观察屏幕内容和 UI 元素位置
-- 点击坐标必须基于你看到的截图像素位置，对准目标元素的中心
-- 如果操作没有预期效果，尝试其他方式（如使用快捷键）
+每个元素包含：角色（如 AXButton、AXTextField）、标题/描述、精确坐标 (x, y, width, height)
+- 坐标与屏幕像素坐标完全一致
+- 计算元素中心点：center_x = x + width/2, center_y = y + height/2
+- 可以用来操作 Dock 上的应用图标、菜单栏项等系统 UI
+- 适合场景：了解当前 UI 结构、获取元素精确坐标、读取文本内容
+
+### computer 工具（屏幕操控）
+通过 action 参数指定操作类型：
+- **screenshot**: 获取当前屏幕截图，适合需要了解整体视觉布局、查看图片/颜色/样式等非结构化信息
+- **click**: 点击指定坐标，参数 coordinate=[x, y]
+- **double_click**: 双击指定坐标，参数 coordinate=[x, y]
+- **right_click**: 右键点击指定坐标，参数 coordinate=[x, y]
+- **type**: 输入文本，参数 text="要输入的内容"
+- **key**: 按键/快捷键，参数 text="ctrl+c" 或 "Return"
+- **scroll**: 滚动，参数 coordinate=[x, y], direction="up"|"down"|"left"|"right", amount=3
+- **mouse_move**: 移动鼠标，参数 coordinate=[x, y]
+- **drag**: 拖拽，参数 start_coordinate=[x, y], end_coordinate=[x, y]
+- **wait**: 等待，参数 duration=2.0
+
+## 工具选择指南
+
+**每次循环你可以自由选择任意工具**，不必每次都先获取控件树或截图。根据当前任务情况灵活判断：
+
+- **需要精确定位后操作**（click、double_click、right_click 等坐标点击操作）→ 优先用 accessibility 获取精确坐标，因为控件树的坐标比看截图估算更准确
+- **需要了解整体页面布局、看图片/颜色/视觉效果** → 用 screenshot
+- **输入文本** → 直接用 type，不需要先获取控件树或截图
+- **按快捷键** → 直接用 key，不需要先获取控件树或截图
+- **滚动页面** → 直接用 scroll
+- **确认操作结果** → 根据需要选择 accessibility 或 screenshot，或者什么都不做直接继续下一步操作
+
+关键原则：**选择最高效的方式完成任务**，不要做多余的操作。如果你已经知道要做什么（比如按快捷键、输入文本），直接操作即可，不需要先获取控件树或截图。
+
+## 注意事项
+- 对于纯聊天、问答类问题（如"你好"、"解释一下xx"），直接文字回复即可，不需要操控屏幕
+- 点击坐标请瞄准目标元素的中心（从控件树坐标计算：x + width/2, y + height/2）
+- 如果操作没有预期效果，尝试其他方式（如使用快捷键、截图看看什么情况）
 - 任务完成后直接回复用户，不要再执行多余操作
-- 如果遇到无法完成的情况，也请如实告知用户"""
+- 如果遇到无法完成的情况，也请如实告知用户
+- 并非所有应用都完整支持 Accessibility API，某些自定义控件可能不出现在控件树中，此时可用 screenshot 截图辅助判断"""
 
     def __init__(self, executor, on_event, model_id: str | None = None):
         super().__init__(executor, on_event)
         self._api_config = None
         self._model = None  # 延迟初始化
         self._requested_model_id = model_id  # 前端指定的模型 ID
-        # 截图坐标 → 物理坐标的缩放比例（在 _get_system_prompt 中计算）
-        self._coord_scale_x = 1.0
-        self._coord_scale_y = 1.0
 
     def _init_config(self):
         """初始化 API 配置（延迟加载）
@@ -390,8 +407,8 @@ class AnthropicComputerUseAdapter(AgentSession):
             {
                 "name": "computer",
                 "description": (
-                    "操控 Mac 电脑的工具。通过 action 参数指定操作类型，"
-                    "不同操作需要不同的附加参数。每次调用后会返回最新的屏幕截图。"
+                    "操控 Mac 电脑的工具。通过 action 参数指定操作类型（如 screenshot、click、type、key、scroll 等），"
+                    "不同操作需要不同的附加参数。"
                 ),
                 "input_schema": {
                     "type": "object",
@@ -445,76 +462,38 @@ class AnthropicComputerUseAdapter(AgentSession):
                     },
                     "required": ["action"],
                 },
-            }
+            },
+            {
+                "name": "accessibility",
+                "description": (
+                    "获取全屏 UI 控件树，覆盖屏幕上所有可交互区域。"
+                    "包含四个部分：1) 前台应用的窗口和控件，2) 其他可见应用的窗口，3) 系统菜单栏（应用菜单 + 状态栏），4) Dock 栏上的应用图标。"
+                    "返回每个 UI 元素的角色、标题、精确坐标 (x, y, width, height)。"
+                    "坐标与截图像素坐标一致，可直接用于 click 操作的 coordinate 参数。"
+                ),
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                },
+            },
         ]
 
     def _get_system_prompt(self) -> str:
-        """生成系统提示词（含截图实际尺寸信息）
-        
-        AI 看到的是带坐标刻度尺的画布（左侧 + 顶部各加 RULER_SIZE 像素），
-        所以告诉 AI 的尺寸是画布尺寸（含刻度尺），与 AI 实际看到的图片一致。
-        
-        坐标映射链路：
-        1. AI 返回画布像素坐标（含刻度尺偏移）
-        2. _scale_coord 减去 RULER_SIZE 得到截图坐标
-        3. 乘以缩放比例得到物理屏幕坐标
-        """
-        # 物理屏幕尺寸
+        """生成系统提示词（含截图实际尺寸信息）"""
         phys_w, phys_h = self.executor.screen.physical_screen_size
         
-        # 模拟 take_screenshot 中 thumbnail 的实际行为
-        # PIL thumbnail 保持比例缩小到 max_size 以内
-        max_w, max_h = self.SCREENSHOT_MAX_SIZE
-        scale = min(max_w / phys_w, max_h / phys_h, 1.0)
-        # 用 round 而非 int，更接近 PIL thumbnail 的实际结果
-        img_w = round(phys_w * scale)
-        img_h = round(phys_h * scale)
-        
-        # 缓存缩放比例（截图坐标 → 物理坐标）
-        self._coord_scale_x = phys_w / img_w
-        self._coord_scale_y = phys_h / img_h
-        
-        # 画布尺寸 = 截图尺寸 + 刻度尺
-        ruler = self.RULER_SIZE
-        canvas_w = img_w + ruler
-        canvas_h = img_h + ruler
-        
         agent_log.info(
-            f"[坐标映射] 物理屏幕 {phys_w}x{phys_h} → 截图 {img_w}x{img_h} "
-            f"→ 画布 {canvas_w}x{canvas_h} (刻度尺={ruler}px), "
-            f"缩放因子 scale={scale:.4f}, "
-            f"坐标还原比 X={self._coord_scale_x:.4f} Y={self._coord_scale_y:.4f}"
+            f"[截图] 物理屏幕 {phys_w}x{phys_h}, "
+            f"AI 坐标范围: x:[0,{phys_w}], y:[0,{phys_h}]"
         )
         
         return self.SYSTEM_PROMPT_TEMPLATE.format(
-            image_width=canvas_w,
-            image_height=canvas_h,
+            image_width=phys_w,
+            image_height=phys_h,
         )
-
-    def _scale_coord(self, x: int, y: int) -> tuple[int, int]:
-        """将 AI 返回的坐标映射回物理屏幕坐标
-        
-        AI 看到的是带坐标刻度尺的画布，它返回的坐标是画布像素坐标。
-        需要先减去刻度尺偏移（RULER_SIZE），再映射到物理屏幕分辨率。
-        """
-        ruler = self.RULER_SIZE
-        # 补偿刻度尺偏移：AI 返回的是画布坐标，需要减去刻度尺宽度得到截图坐标
-        img_x = max(0, x - ruler)
-        img_y = max(0, y - ruler)
-        phys_x = int(round(img_x * self._coord_scale_x))
-        phys_y = int(round(img_y * self._coord_scale_y))
-        agent_log.debug(
-            f"[坐标转换] 画布坐标 ({x}, {y}) → 截图坐标 ({img_x}, {img_y}) "
-            f"→ 物理坐标 ({phys_x}, {phys_y}) "
-            f"[刻度尺偏移={ruler}, 比例 X={self._coord_scale_x:.4f} Y={self._coord_scale_y:.4f}]"
-        )
-        return phys_x, phys_y
 
     def _parse_tool_action(self, tool_input: dict) -> Optional[ActionRequest]:
         """将 AI computer tool 的 input 解析为 ActionRequest
-        
-        AI 返回的坐标基于截图图片的像素坐标，
-        这里通过 _scale_coord 映射回物理屏幕坐标后再执行。
 
         动作格式:
         - {"action": "screenshot"}
@@ -537,27 +516,24 @@ class AnthropicComputerUseAdapter(AgentSession):
 
         elif action == "click":
             coord = tool_input.get("coordinate", [0, 0])
-            px, py = self._scale_coord(int(coord[0]), int(coord[1]))
             return ActionRequest(
                 action=ActionType.CLICK,
-                x=px, y=py,
+                x=max(0, int(coord[0])), y=max(0, int(coord[1])),
                 button="left",
             )
 
         elif action == "double_click":
             coord = tool_input.get("coordinate", [0, 0])
-            px, py = self._scale_coord(int(coord[0]), int(coord[1]))
             return ActionRequest(
                 action=ActionType.DOUBLE_CLICK,
-                x=px, y=py,
+                x=max(0, int(coord[0])), y=max(0, int(coord[1])),
             )
 
         elif action == "right_click":
             coord = tool_input.get("coordinate", [0, 0])
-            px, py = self._scale_coord(int(coord[0]), int(coord[1]))
             return ActionRequest(
                 action=ActionType.RIGHT_CLICK,
-                x=px, y=py,
+                x=max(0, int(coord[0])), y=max(0, int(coord[1])),
             )
 
         elif action == "type":
@@ -578,33 +554,29 @@ class AnthropicComputerUseAdapter(AgentSession):
 
         elif action == "scroll":
             coord = tool_input.get("coordinate", [0, 0])
-            px, py = self._scale_coord(int(coord[0]), int(coord[1]))
             direction = tool_input.get("direction", "down")
             amount = tool_input.get("amount", 3)
             return ActionRequest(
                 action=ActionType.SCROLL,
-                x=px, y=py,
+                x=max(0, int(coord[0])), y=max(0, int(coord[1])),
                 direction=direction,
                 amount=amount,
             )
 
         elif action == "mouse_move":
             coord = tool_input.get("coordinate", [0, 0])
-            px, py = self._scale_coord(int(coord[0]), int(coord[1]))
             return ActionRequest(
                 action=ActionType.MOVE,
-                x=px, y=py,
+                x=max(0, int(coord[0])), y=max(0, int(coord[1])),
             )
 
         elif action == "drag":
             start = tool_input.get("start_coordinate", [0, 0])
             end = tool_input.get("end_coordinate", [0, 0])
-            sx, sy = self._scale_coord(int(start[0]), int(start[1]))
-            ex, ey = self._scale_coord(int(end[0]), int(end[1]))
             return ActionRequest(
                 action=ActionType.DRAG,
-                x=sx, y=sy,
-                end_x=ex, end_y=ey,
+                x=max(0, int(start[0])), y=max(0, int(start[1])),
+                end_x=max(0, int(end[0])), end_y=max(0, int(end[1])),
                 duration=0.5,
             )
 
@@ -721,6 +693,137 @@ class AnthropicComputerUseAdapter(AgentSession):
             "is_error": not result.success,
         }
 
+    @staticmethod
+    def _strip_old_ui_trees(messages: list[dict], keep: int = 2) -> list[dict]:
+        """裁剪消息历史中的旧控件树，只保留最近 N 次，避免 token 爆炸
+        
+        策略：
+        - 遍历所有消息，找到 accessibility tool_result 中的控件树文本
+        - 只保留最近 keep 次控件树，其余替换为文字占位符 "[控件树已省略]"
+        
+        Anthropic 格式中，控件树出现在 user 消息的 content list 中：
+        - {"type": "tool_result", "tool_use_id": "...", "content": [{"type": "text", "text": "...控件树..."}]}
+        
+        识别方式：通过检查 assistant 消息中对应的 tool_use name 是否为 "accessibility"
+        """
+        import copy
+        
+        # 第一步：收集所有 accessibility tool_use 的 ID
+        accessibility_tool_ids = set()
+        for msg in messages:
+            if msg.get("role") != "assistant":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "accessibility":
+                        accessibility_tool_ids.add(block.get("id"))
+        
+        if not accessibility_tool_ids:
+            return messages
+        
+        # 第二步：收集所有 accessibility tool_result 的位置 (msg_idx, content_idx)
+        tree_positions = []
+        for msg_idx, msg in enumerate(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content")
+            if isinstance(content, list):
+                for c_idx, block in enumerate(content):
+                    if (isinstance(block, dict) 
+                        and block.get("type") == "tool_result" 
+                        and block.get("tool_use_id") in accessibility_tool_ids):
+                        tree_positions.append((msg_idx, c_idx))
+        
+        if len(tree_positions) <= keep:
+            return messages
+        
+        # 第三步：深拷贝并替换旧控件树
+        stripped = copy.deepcopy(messages)
+        old_positions = tree_positions[:-keep]  # 保留最后 keep 个
+        
+        removed_count = 0
+        for msg_idx, c_idx in old_positions:
+            block = stripped[msg_idx]["content"][c_idx]
+            # 替换 content 中的控件树文本
+            block["content"] = [{"type": "text", "text": "[控件树已省略]"}]
+            removed_count += 1
+        
+        agent_log.info(
+            f"[控件树裁剪] 消息历史中共 {len(tree_positions)} 次控件树，"
+            f"移除了 {removed_count} 次旧控件树，保留最近 {keep} 次"
+        )
+        
+        return stripped
+
+    @staticmethod
+    def _strip_old_images(messages: list[dict]) -> list[dict]:
+        """裁剪消息历史中的图片，只保留最后一张，避免 token 爆炸
+        
+        策略：
+        - 遍历所有消息，找到所有含图片的位置
+        - 只保留最后一张图片，其余图片替换为文字占位符 "[截图已省略]"
+        - 文字内容全部保留
+        
+        Anthropic 格式中，图片出现在 content list 中：
+        - user 消息: {"type": "image", "source": {"type": "base64", ...}}
+        - tool_result: content list 中的 {"type": "image", ...}
+        """
+        import copy
+        
+        # 第一遍：收集所有图片的位置 (msg_idx, content_idx)
+        image_positions = []
+        for msg_idx, msg in enumerate(messages):
+            content = msg.get("content")
+            if isinstance(content, list):
+                for c_idx, block in enumerate(content):
+                    if isinstance(block, dict):
+                        # user 消息中的 image block
+                        if block.get("type") == "image":
+                            image_positions.append((msg_idx, c_idx))
+                        # tool_result 中嵌套的 image block
+                        elif block.get("type") == "tool_result":
+                            inner_content = block.get("content", [])
+                            if isinstance(inner_content, list):
+                                for ic_idx, inner_block in enumerate(inner_content):
+                                    if isinstance(inner_block, dict) and inner_block.get("type") == "image":
+                                        image_positions.append((msg_idx, c_idx, ic_idx))
+        
+        if len(image_positions) <= 1:
+            # 只有 0 或 1 张图片，无需裁剪
+            return messages
+        
+        # 第二遍：深拷贝并替换旧图片
+        stripped = copy.deepcopy(messages)
+        # 保留最后一张图片，替换其余的
+        old_positions = image_positions[:-1]
+        
+        removed_count = 0
+        for pos in old_positions:
+            if len(pos) == 2:
+                # 直接在 content list 中的 image
+                msg_idx, c_idx = pos
+                stripped[msg_idx]["content"][c_idx] = {
+                    "type": "text",
+                    "text": "[截图已省略]",
+                }
+                removed_count += 1
+            elif len(pos) == 3:
+                # tool_result 内部的 image
+                msg_idx, c_idx, ic_idx = pos
+                stripped[msg_idx]["content"][c_idx]["content"][ic_idx] = {
+                    "type": "text",
+                    "text": "[截图已省略]",
+                }
+                removed_count += 1
+        
+        agent_log.info(
+            f"[图片裁剪] 消息历史中共 {len(image_positions)} 张图片，"
+            f"移除了 {removed_count} 张旧图片，保留最后 1 张"
+        )
+        
+        return stripped
+
     async def _call_model(self, messages: list[dict]) -> dict:
         """调用 Anthropic Messages API（纯 HTTP，不依赖 SDK）
 
@@ -737,7 +840,12 @@ class AnthropicComputerUseAdapter(AgentSession):
         base_url = self._api_config["base_url"] or "https://api.anthropic.com"
         api_key = self._api_config["api_key"]
 
-        logger.debug(f"调用 API: {len(messages)} 条消息, model={model}")
+        # 裁剪历史控件树，只保留最近 2 次，避免 token 爆炸
+        trimmed_messages = self._strip_old_ui_trees(messages, keep=2)
+        # 裁剪历史图片，只保留最后一张，避免 token 爆炸
+        trimmed_messages = self._strip_old_images(trimmed_messages)
+
+        logger.debug(f"调用 API: {len(trimmed_messages)} 条消息, model={model}")
 
         # 使用 asyncio.to_thread 包装同步 HTTP 调用
         _t0 = time.monotonic()
@@ -747,7 +855,7 @@ class AnthropicComputerUseAdapter(AgentSession):
             api_key=api_key,
             model=model,
             system=system_prompt,
-            messages=messages,
+            messages=trimmed_messages,
             tools=tools,
             max_tokens=self.MAX_TOKENS,
         )
@@ -763,11 +871,11 @@ class AnthropicComputerUseAdapter(AgentSession):
 
         return response
 
-    async def _run_loop(self, task: str, initial_screenshot: str) -> None:
+    async def _run_loop(self, task: str) -> None:
         """Anthropic Computer Use 执行循环
 
         流程:
-        1. 构造初始消息（用户任务 + 截图）
+        1. 构造初始消息（纯任务文本，AI 自行决定是否获取控件树/截图）
         2. 调用 Anthropic API（纯 HTTP）
         3. 解析响应中的 tool_use blocks（dict 格式）
         4. 执行每个 tool_use 对应的操作，收集 tool_result
@@ -780,36 +888,17 @@ class AnthropicComputerUseAdapter(AgentSession):
         agent_log.info(f"[Agent 任务开始] 任务内容: {task}")
         agent_log.info(f"{'='*60}")
         
-        # 根据是否有初始截图构造不同的消息
-        if initial_screenshot:
-            agent_log.info("[初始消息] 带截图，AI 可直接看到当前屏幕")
-            user_content = [
-                {
-                    "type": "text",
-                    "text": task,
-                },
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": initial_screenshot,
-                    },
-                },
-            ]
-        else:
-            agent_log.info("[初始消息] 纯文本，AI 可通过 screenshot 动作主动获取屏幕截图")
-            user_content = [
-                {
-                    "type": "text",
-                    "text": task,
-                },
-            ]
-        
+        # 纯任务文本，AI 根据系统提示词自行决定是否需要获取控件树或截图
+        agent_log.info("[初始消息] 纯文本，AI 自行决定是否需要获取控件树或截图")
         messages = [
             {
                 "role": "user",
-                "content": user_content,
+                "content": [
+                    {
+                        "type": "text",
+                        "text": task,
+                    },
+                ],
             }
         ]
 
@@ -820,7 +909,7 @@ class AnthropicComputerUseAdapter(AgentSession):
                 break
 
             # 调用 AI
-            await self._emit(StepType.THINKING, {"content": "AI 正在分析屏幕..."})
+            await self._emit(StepType.THINKING, {"content": "AI 正在思考..."})
 
             try:
                 response = await self._call_model(messages)
@@ -858,16 +947,33 @@ class AnthropicComputerUseAdapter(AgentSession):
                 elif block_type == "tool_use":
                     has_tool_use = True
                     tool_use_id = block.get("id", "")
+                    tool_name = block.get("name", "unknown")
                     tool_input = block.get("input", {})
 
                     agent_log.info(
-                        f"[Tool Use] name={block.get('name', 'unknown')}, "
+                        f"[Tool Use] name={tool_name}, "
                         f"action={tool_input.get('action', 'unknown')}, "
                         f"id={tool_use_id}, "
                         f"params={json.dumps(tool_input, ensure_ascii=False)}"
                     )
 
-                    # 解析动作
+                    # accessibility 工具：获取 UI 控件树
+                    if tool_name == "accessibility":
+                        agent_log.info("[Tool Use] 获取 UI 控件树...")
+                        await self._emit(StepType.ACTION, {
+                            "content": "获取 UI 控件树...",
+                            "action": "accessibility",
+                        })
+                        tree_text = await asyncio.to_thread(self.get_ui_tree)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": [{"type": "text", "text": tree_text}],
+                            "is_error": False,
+                        })
+                        continue
+
+                    # computer 工具：解析动作
                     action_req = self._parse_tool_action(tool_input)
                     if action_req is None:
                         # 无法解析的动作
@@ -895,18 +1001,38 @@ class AnthropicComputerUseAdapter(AgentSession):
                         ))
                         continue
 
-                    # 执行动作并截图
-                    action_result, screenshot_b64 = await self._execute_and_screenshot(action_req)
+                    # 执行动作
+                    action_result = await self._execute_action(action_req)
                     agent_log.info(
                         f"[动作结果] action={action_req.action.value}, "
                         f"success={action_result.success}"
                         f"{', error=' + action_result.error if action_result.error else ''}"
                     )
-                    tool_results.append(self._format_tool_result(
-                        tool_use_id,
-                        action_result,
-                        screenshot_b64=screenshot_b64,
-                    ))
+                    
+                    # 构造 tool_result：只返回执行结果，AI 自行决定是否获取控件树或截图
+                    result_content = []
+                    if action_result.error:
+                        result_content.append({
+                            "type": "text",
+                            "text": f"Error: {action_result.error}",
+                        })
+                    elif action_result.data:
+                        result_content.append({
+                            "type": "text",
+                            "text": json.dumps(action_result.data),
+                        })
+                    if not result_content:
+                        result_content.append({
+                            "type": "text",
+                            "text": "操作已执行成功。",
+                        })
+                    
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": result_content,
+                        "is_error": not action_result.success,
+                    })
 
             # 将 tool_results 追加到消息历史
             if tool_results:

@@ -11,6 +11,10 @@
     <div id="connect-overlay">
         <h1>AnyBot</h1>
         <p>远程控制你的 Mac</p>
+        <div id="connect-mode-select">
+            <label><input type="radio" name="stream-mode" value="auto" checked> 自动（优先 WebRTC）</label>
+            <label><input type="radio" name="stream-mode" value="mjpeg"> MJPEG（公司网络推荐）</label>
+        </div>
         <button id="connect-btn" onclick="startConnection()">连接</button>
         <div id="connect-info"></div>
     </div>

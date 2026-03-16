@@ -11,5 +11,6 @@ build/
 logs/
 .anybot_pinned.json
 config.json
+debug_ui_trees/
 .codebuddy/
 

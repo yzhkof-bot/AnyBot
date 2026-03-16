@@ -12,12 +12,12 @@ Tools:
   - cursor_position: 获取当前鼠标光标位置
 
 使用方式:
-  1. 确保 AnyBot 主服务正在运行（默认 http://localhost:8765）
+  1. 确保 AnyBot 主服务正在运行（默认 http://localhost:8080）
   2. 运行: python mcp_server.py
   3. 或在 Claude Desktop 配置中添加此脚本
 
 配置（环境变量）:
-  ANYBOT_URL: AnyBot 服务地址（默认 http://localhost:8765）
+  ANYBOT_URL: AnyBot 服务地址（默认 http://localhost:8080）
 """
 
 import os
@@ -30,7 +30,7 @@ from typing import Any
 from fastmcp import FastMCP
 
 # AnyBot 主服务地址
-ANYBOT_URL = os.environ.get("ANYBOT_URL", "http://localhost:8765")
+ANYBOT_URL = os.environ.get("ANYBOT_URL", "http://localhost:8080")
 
 # 创建 MCP Server
 mcp = FastMCP(
@@ -143,6 +143,33 @@ def cursor_position() -> dict:
         光标坐标 {"x": int, "y": int}
     """
     return _api_get("/api/cursor")
+
+
+@mcp.tool()
+def accessibility_snapshot() -> str:
+    """获取当前 Mac 前台应用的 UI 控件树（Accessibility API）。
+
+    返回所有可见 UI 元素的结构化信息，每个元素包含：
+    - 角色（如 AXButton、AXTextField、AXStaticText）
+    - 标题/描述文本
+    - 精确坐标 (x, y, width, height)
+
+    坐标与截图像素坐标完全一致。
+
+    适用场景：
+    - 需要精确定位 UI 元素的坐标时
+    - 截图中元素较小、密集或难以辨识时
+    - 需要获取 UI 元素的文本内容时
+    - 需要了解应用的 UI 层次结构时
+
+    注意：并非所有应用都完整支持 Accessibility API，
+    某些自定义控件可能不出现在控件树中。
+
+    Returns:
+        缩进文本格式的 UI 控件树字符串
+    """
+    data = _api_get("/api/accessibility")
+    return data.get("tree", "")
 
 
 if __name__ == "__main__":

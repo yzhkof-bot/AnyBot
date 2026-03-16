@@ -10,6 +10,7 @@ from fastapi import APIRouter, Response, UploadFile, File, Query
 from loguru import logger
 
 from ..core.action_executor import ActionRequest, ActionResult
+from ..core.accessibility import get_accessibility_tree
 
 router = APIRouter(prefix="/api", tags=["control"])
 
@@ -130,6 +131,20 @@ async def unpin_window(request: dict):
     
     result = executor.screen.unpin_window(window_id)
     return {"success": result, "pinned_ids": executor.screen.pinned_window_ids}
+
+
+# ───────── Accessibility 控件树 ─────────
+
+@router.get("/accessibility")
+async def get_accessibility():
+    """获取当前前台应用的 UI 控件树（Accessibility API）
+    
+    返回缩进文本格式的控件树，包含每个 UI 元素的角色、标题、坐标和尺寸。
+    坐标与截图像素坐标一致，可直接用于操控动作的坐标参数。
+    """
+    import asyncio
+    tree_text = await asyncio.to_thread(get_accessibility_tree)
+    return {"tree": tree_text}
 
 
 @router.post("/screen/wake")

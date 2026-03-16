@@ -81,23 +81,42 @@ async function startConnection() {
     btn.disabled = true;
     btn.textContent = '连接中...';
 
+    // 读取用户选择的传输模式
+    const modeRadio = document.querySelector('input[name="stream-mode"]:checked');
+    const preferredMode = modeRadio ? modeRadio.value : 'auto';
+
     try {
         // 先获取屏幕信息
-        const host = location.host || 'localhost:8765';
+        const host = location.host || 'localhost:8080';
         const protocol = location.protocol === 'https:' ? 'https' : 'http';
         const resp = await fetch(`${protocol}://${host}/api/screen/info`);
         const screenInfo = await resp.json();
         state.screenWidth = screenInfo.width;
         state.screenHeight = screenInfo.height;
 
-        // 尝试 WebRTC 连接
-        try {
-            await startWebRTC(host, protocol);
-            state.streamMode = 'webrtc';
-            console.log('[AnyBot] WebRTC 连接成功 (H.264 视频流)');
-        } catch (rtcErr) {
-            // WebRTC 失败，回退到 MJPEG
-            console.warn('[AnyBot] WebRTC 失败，回退到 MJPEG:', rtcErr);
+        if (preferredMode === 'auto') {
+            // 自动模式：先尝试 WebRTC，失败回退 MJPEG
+            try {
+                await startWebRTC(host, protocol);
+                state.streamMode = 'webrtc';
+                console.log('[AnyBot] WebRTC 信令完成，等待验证媒体流...');
+
+                const webrtcOk = await verifyWebRTCMedia(5000);
+                if (!webrtcOk) {
+                    throw new Error('WebRTC 媒体流超时（UDP 可能被防火墙拦截）');
+                }
+                console.log('[AnyBot] WebRTC 连接成功 (H.264 视频流)');
+            } catch (rtcErr) {
+                console.warn('[AnyBot] WebRTC 失败，回退到 MJPEG:', rtcErr);
+                cleanupWebRTC();
+                state.streamMode = 'mjpeg';
+                const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+                connectScreenWs(`${wsProtocol}://${host}/ws/screen`);
+                connectControlWs(`${wsProtocol}://${host}/ws/control`);
+            }
+        } else {
+            // 用户直接选择 MJPEG 模式（跳过 WebRTC 尝试，避免等待）
+            console.log('[AnyBot] 用户选择 MJPEG 模式，直接建立 WebSocket 连接');
             state.streamMode = 'mjpeg';
             const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
             connectScreenWs(`${wsProtocol}://${host}/ws/screen`);
@@ -123,7 +142,14 @@ async function startConnection() {
 
 async function startWebRTC(host, protocol) {
     const pc = new RTCPeerConnection({
-        iceServers: [],  // 局域网直连，不需要 STUN/TURN
+        // STUN 服务器帮助发现局域网 IP（尤其是手机 → Mac 跨设备场景）
+        // 如果公司网络完全封锁 UDP，STUN 也不起作用，此时会自动回退到 MJPEG
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+        ],
+        // 优先使用局域网直连候选（避免绕远走公网 relay）
+        iceTransportPolicy: 'all',
     });
     state.pc = pc;
     state._lastWebrtcBytes = 0;
@@ -267,6 +293,74 @@ function waitForIceGathering(pc) {
 }
 
 /**
+ * 验证 WebRTC 媒体流是否真正到达
+ *
+ * 背景：在公司防火墙等网络环境下，WebRTC 的 SDP 信令通过 HTTP(TCP) 可以成功交换，
+ * 但实际的媒体流走 UDP 随机端口，可能被防火墙拦截。表现为"连接成功但黑屏"。
+ *
+ * 检测方法：通过 RTCPeerConnection.getStats() 查看 inbound-rtp 的 bytesReceived，
+ * 如果在超时时间内收到了实际数据，说明 UDP 通道畅通。
+ *
+ * @param {number} timeoutMs - 超时时间（毫秒），默认 5000
+ * @returns {Promise<boolean>} - 媒体流是否正常到达
+ */
+function verifyWebRTCMedia(timeoutMs = 5000) {
+    return new Promise((resolve) => {
+        const pc = state.pc;
+        if (!pc) {
+            resolve(false);
+            return;
+        }
+
+        const startTime = Date.now();
+        const checkInterval = 500; // 每 500ms 检查一次
+
+        function check() {
+            if (!state.pc || state.pc !== pc) {
+                resolve(false);
+                return;
+            }
+
+            // 超时
+            if (Date.now() - startTime > timeoutMs) {
+                console.warn('[WebRTC] 媒体流验证超时，未收到视频数据');
+                resolve(false);
+                return;
+            }
+
+            // 方法1: 检查 video 元素是否有画面
+            if (state.videoEl && state.videoEl.videoWidth > 0 && state.videoEl.videoHeight > 0) {
+                console.log('[WebRTC] 媒体流验证通过 (video 已有画面)');
+                resolve(true);
+                return;
+            }
+
+            // 方法2: 检查 RTCPeerConnection stats 中的实际接收字节数
+            pc.getStats().then(stats => {
+                let bytesReceived = 0;
+                stats.forEach(report => {
+                    if (report.type === 'inbound-rtp' && report.kind === 'video') {
+                        bytesReceived = report.bytesReceived || 0;
+                    }
+                });
+
+                if (bytesReceived > 0) {
+                    console.log(`[WebRTC] 媒体流验证通过 (已接收 ${bytesReceived} 字节)`);
+                    resolve(true);
+                } else {
+                    // 继续等待
+                    setTimeout(check, checkInterval);
+                }
+            }).catch(() => {
+                setTimeout(check, checkInterval);
+            });
+        }
+
+        check();
+    });
+}
+
+/**
  * 将 <video> 的画面实时绘制到 <canvas>
  * 这样触摸事件仍然绑定在 canvas 上，与 MJPEG 模式一致
  */
@@ -360,7 +454,7 @@ function handleWebRTCDisconnect() {
 
 async function reconnectWebRTC(retries = 3, delay = 1000) {
     _webrtcReconnecting = true;
-    const host = location.host || 'localhost:8765';
+    const host = location.host || 'localhost:8080';
     const protocol = location.protocol === 'https:' ? 'https' : 'http';
 
     for (let i = 1; i <= retries; i++) {

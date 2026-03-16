@@ -2,7 +2,7 @@
 """AnyBot API 快速测试"""
 import json, base64, requests, websocket
 
-BASE = "http://localhost:9765"
+BASE = "http://localhost:8080"
 passed = failed = 0
 
 def run(name, fn):
@@ -55,7 +55,7 @@ def t7():
 run("action_move", t7)
 
 def t8():
-    ws = websocket.create_connection("ws://localhost:9765/ws/control", timeout=5)
+    ws = websocket.create_connection("ws://localhost:8080/ws/control", timeout=5)
     ws.send(json.dumps({"action": "cursor_position"}))
     r = json.loads(ws.recv())
     assert r["success"]
@@ -64,7 +64,7 @@ def t8():
 run("ws_ctrl", t8)
 
 def t9():
-    ws = websocket.create_connection("ws://localhost:9765/ws/screen", timeout=5)
+    ws = websocket.create_connection("ws://localhost:8080/ws/screen", timeout=5)
     sizes = []
     for _ in range(3):
         data = ws.recv()

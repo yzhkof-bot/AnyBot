@@ -37,17 +37,8 @@ logger.add(
     encoding="utf-8",
     enqueue=True,          # 线程安全异步写入
 )
-# Agent 专用日志 — 单独文件，记录聊天和操控详情
-logger.add(
-    str(_LOG_DIR / "agent_{time:YYYY-MM-DD}.log"),
-    level="DEBUG",
-    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level:7s} | {message}",
-    rotation="00:00",
-    retention="7 days",
-    encoding="utf-8",
-    enqueue=True,
-    filter=lambda record: record["extra"].get("agent", False),
-)
+# Agent 专用日志 — 按聊天会话轮转，由 chat_api 在每次新任务时动态添加
+# （不在此处静态注册，改为 chat_api.start_agent_session_log() 按需创建）
 
 # FastAPI 应用
 app = FastAPI(
@@ -117,7 +108,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "server.main:app",
         host="0.0.0.0",
-        port=8765,
+        port=8080,
         reload=False,
         log_level="info",
     )

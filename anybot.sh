@@ -10,7 +10,7 @@ VENV_PYTHON="$PROJECT_DIR/.venv/bin/python3"
 PID_FILE="$PROJECT_DIR/.anybot.pid"
 CAFFEINATE_PID_FILE="$PROJECT_DIR/.anybot_caffeinate.pid"
 LOG_FILE="$PROJECT_DIR/anybot.log"
-PORT=9765
+PORT=8080
 
 # 颜色
 RED='\033[0;31m'

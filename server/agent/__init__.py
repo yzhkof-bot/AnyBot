@@ -1,6 +1,10 @@
 """
 AI Agent 模块 - Computer Use 功能
-支持 Anthropic Computer Use 协议，通过截图→分析→操控循环自主完成任务
+支持 Anthropic Computer Use 协议和 OpenAI 兼容协议，通过截图→分析→操控循环自主完成任务
+
+适配器:
+  - AnthropicComputerUseAdapter: Claude 系列模型（/v1/messages 格式）
+  - OpenAICompatAdapter: GPT、GLM、Kimi、Minimax 等（/v1/chat/completions 格式）
 
 可用模型:
   - Claude Opus 4.6 / 4.5, Claude Sonnet 4.6 / 4.5 (Anthropic, 支持 Computer Use)
@@ -14,3 +18,4 @@ from .anthropic_adapter import (
     get_available_models,
     get_model_info,
 )
+from .openai_adapter import OpenAICompatAdapter

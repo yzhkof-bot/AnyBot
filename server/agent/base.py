@@ -1,7 +1,7 @@
 """
 Agent 会话基类 - 执行循环核心逻辑
 
-截图 → 发送给 AI → 解析 tool_use → 执行动作 → 再截图 → 循环
+AI 自行决定每步是否获取控件树/截图/执行操作，框架层不强制获取任何上下文。
 支持暂停/恢复/停止控制
 """
 
@@ -13,6 +13,7 @@ from typing import Callable, Awaitable, Optional, Any
 from loguru import logger
 
 from ..core.action_executor import ActionExecutor, ActionRequest, ActionResult, ActionType
+from ..core.accessibility import get_accessibility_tree
 
 # Agent 专用日志器
 agent_log = logger.bind(agent=True)
@@ -78,13 +79,6 @@ class AgentSession:
     MAX_STEPS = 50
     # 截图参数
     SCREENSHOT_QUALITY = 70
-    SCREENSHOT_MAX_SIZE = (1280, 800)
-    # 坐标刻度尺参数（帮助 AI 精确定位）
-    RULER_SIZE = 20          # 刻度尺宽度（像素）
-    RULER_COLOR = (50, 50, 50)        # 刻度尺背景色（深灰）
-    RULER_TEXT_COLOR = (220, 220, 220)  # 刻度文字颜色（浅灰）
-    RULER_TICK_COLOR = (180, 180, 180)  # 刻度线颜色
-    RULER_INTERVAL = 100     # 刻度间隔（像素）
 
     def __init__(
         self,
@@ -122,78 +116,116 @@ class AgentSession:
             logger.warning(f"事件推送失败: {e}")
 
     def take_screenshot(self) -> str:
-        """截取全屏，绘制坐标刻度尺后返回 base64
+        """截取全屏原始截图，直接编码返回 base64
         
         Agent 始终使用全屏截图，不受前端窗口模式影响。
-        截图边缘绘制 X/Y 坐标刻度尺，帮助 AI 精确定位坐标。
-        
-        注意：刻度尺标注的是原始截图坐标（不含刻度尺偏移），
-        AI 返回的坐标也是原始截图坐标。系统会自动处理偏移。
+        不做任何标注/叠加，AI 直接看原始屏幕内容。
         """
         import io
         import base64
-        from PIL import Image, ImageDraw, ImageFont
 
-        # 截取全屏原始图
+        # 截取全屏原始图（不缩放，保持物理分辨率）
         img = self.executor.screen.capture_fullscreen_raw()
-        # 缩放到 Agent 截图尺寸
-        if self.SCREENSHOT_MAX_SIZE:
-            img.thumbnail(self.SCREENSHOT_MAX_SIZE, Image.Resampling.LANCZOS)
-        
         orig_w, orig_h = img.size
-        ruler = self.RULER_SIZE
-
-        # 创建带刻度尺的新画布（左侧 + 顶部各加 ruler 像素）
-        new_w = orig_w + ruler
-        new_h = orig_h + ruler
-        canvas = Image.new("RGB", (new_w, new_h), self.RULER_COLOR)
-        # 把原始截图粘贴到右下区域
-        canvas.paste(img, (ruler, ruler))
-
-        draw = ImageDraw.Draw(canvas)
-
-        # 使用默认字体（小号）
-        try:
-            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 10)
-        except Exception:
-            font = ImageFont.load_default()
-
-        interval = self.RULER_INTERVAL
-
-        # 绘制顶部 X 轴刻度尺
-        for x in range(0, orig_w, interval):
-            # 刻度线
-            draw.line([(ruler + x, ruler - 6), (ruler + x, ruler)], fill=self.RULER_TICK_COLOR, width=1)
-            # 数字标签
-            label = str(x)
-            draw.text((ruler + x + 2, 2), label, fill=self.RULER_TEXT_COLOR, font=font)
-
-        # 绘制左侧 Y 轴刻度尺
-        for y in range(0, orig_h, interval):
-            # 刻度线
-            draw.line([(ruler - 6, ruler + y), (ruler, ruler + y)], fill=self.RULER_TICK_COLOR, width=1)
-            # 数字标签（垂直方向）
-            label = str(y)
-            draw.text((1, ruler + y + 2), label, fill=self.RULER_TEXT_COLOR, font=font)
 
         # 编码为 JPEG base64
         buf = io.BytesIO()
-        canvas.save(buf, format="JPEG", quality=self.SCREENSHOT_QUALITY, optimize=True)
+        img.save(buf, format="JPEG", quality=self.SCREENSHOT_QUALITY, optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
 
         agent_log.debug(
-            f"[截图+刻度尺] 原始 {orig_w}x{orig_h} → 画布 {new_w}x{new_h}, "
+            f"[截图] {orig_w}x{orig_h}, "
             f"quality={self.SCREENSHOT_QUALITY}, base64_len={len(b64)}"
         )
         return b64
+
+    # 调试用：保留最近 N 次控件树结果到文件
+    _UI_TREE_DEBUG_DIR = "debug_ui_trees"
+    _UI_TREE_KEEP_COUNT = 5
+
+    def get_ui_tree(self) -> str:
+        """获取当前前台应用的 UI 控件树（Accessibility API）
+        
+        返回缩进文本格式的控件树，包含每个 UI 元素的角色、标题、坐标和尺寸。
+        坐标与截图像素坐标一致，可直接用于 click 操作的 coordinate 参数。
+        
+        调试模式下会将最近 5 次控件树保存到 debug_ui_trees/ 目录，方便排查问题。
+        
+        Returns:
+            控件树文本字符串
+        """
+        import time as _time
+        _t0 = _time.monotonic()
+        tree_text = get_accessibility_tree()
+        _elapsed = _time.monotonic() - _t0
+        
+        # 统计信息
+        line_count = tree_text.count('\n') + 1
+        char_count = len(tree_text)
+        agent_log.info(
+            f"[控件树] 耗时 {_elapsed:.3f}s, "
+            f"行数={line_count}, 字符数={char_count}"
+        )
+        
+        # 保存到调试文件（最近 N 次）
+        self._save_ui_tree_debug(tree_text, _elapsed)
+        
+        return tree_text
+
+    def _save_ui_tree_debug(self, tree_text: str, elapsed: float) -> None:
+        """将控件树保存到调试文件，保留最近 N 次结果
+        
+        文件命名：ui_tree_{序号}_{时间戳}.txt
+        自动清理超出保留数量的旧文件。
+        """
+        import os
+        from datetime import datetime
+        
+        try:
+            # 确保调试目录存在（相对于项目根目录）
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            debug_dir = os.path.join(project_root, self._UI_TREE_DEBUG_DIR)
+            os.makedirs(debug_dir, exist_ok=True)
+            
+            # 生成文件名（带时间戳方便排查）
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"ui_tree_{ts}.txt"
+            filepath = os.path.join(debug_dir, filename)
+            
+            # 写入文件，头部附加统计信息
+            line_count = tree_text.count('\n') + 1
+            header = (
+                f"# UI 控件树调试快照\n"
+                f"# 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"# 耗时: {elapsed:.3f}s\n"
+                f"# 行数: {line_count}, 字符数: {len(tree_text)}\n"
+                f"# {'=' * 60}\n\n"
+            )
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(header + tree_text)
+            
+            agent_log.debug(f"[控件树调试] 已保存: {filepath}")
+            
+            # 清理旧文件，只保留最近 N 个
+            existing = sorted(
+                [f for f in os.listdir(debug_dir) if f.startswith("ui_tree_") and f.endswith(".txt")]
+            )
+            while len(existing) > self._UI_TREE_KEEP_COUNT:
+                old_file = existing.pop(0)
+                old_path = os.path.join(debug_dir, old_file)
+                os.remove(old_path)
+                agent_log.debug(f"[控件树调试] 已清理旧文件: {old_file}")
+                
+        except Exception as e:
+            # 调试功能不影响主流程
+            agent_log.warning(f"[控件树调试] 保存失败（不影响功能）: {e}")
 
     def execute_action(self, req: ActionRequest) -> ActionResult:
         """执行一个操控动作（同步）
         
         Agent 仅允许调用 AGENT_ACTIONS 中的动作。
         使用 execute_absolute（物理屏幕绝对坐标），
-        因为 Agent 截取的是全屏截图，坐标已通过 _scale_coord 
-        映射为物理屏幕绝对坐标，不需要再叠加窗口偏移。
+        因为 Agent 截取的是全屏截图，AI 返回的坐标就是物理屏幕绝对坐标。
         """
         if req.action in HUMAN_ONLY_ACTIONS:
             return ActionResult(
@@ -202,52 +234,6 @@ class AgentSession:
                 error=f"动作 {req.action.value} 仅供人工触控使用，Agent 请使用 drag 代替",
             )
         return self.executor.execute_absolute(req)
-
-    # 需要操控屏幕的任务关键词（匹配到任意一个就需要截图）
-    _SCREEN_ACTION_KEYWORDS = [
-        # 鼠标操作
-        "点击", "点一下", "点开", "打开", "关闭", "最小化", "最大化",
-        "双击", "右键", "右击", "拖拽", "拖动", "拖放",
-        # 键盘操作
-        "输入", "填写", "键入", "敲入", "按下", "按键",
-        "复制", "粘贴", "剪切", "撤销", "全选",
-        # 滚动
-        "滚动", "翻页", "向上滚", "向下滚", "滑动",
-        # 应用操作
-        "启动", "切换到", "切换窗口", "打开应用",
-        "微信", "企业微信", "Safari", "Chrome", "浏览器",
-        "Finder", "终端", "Terminal", "VSCode", "Xcode",
-        # 屏幕相关
-        "屏幕", "界面", "窗口", "桌面", "菜单", "Dock",
-        "看看", "看一下", "显示的", "当前屏幕",
-        "截图", "截屏",
-        # 文件操作
-        "文件夹", "目录", "保存", "另存为", "下载",
-        # 网页操作
-        "网页", "网站", "URL", "链接", "百度", "谷歌",
-        "登录", "注册",
-        # 英文关键词
-        "click", "open", "close", "type", "scroll", "drag",
-        "launch", "switch", "press",
-    ]
-
-    def _task_needs_screenshot(self, task: str) -> bool:
-        """判断任务是否需要操控屏幕（需要先截图）
-        
-        通过关键词匹配判断：
-        - 包含操控类关键词 → 需要截图
-        - 纯聊天/问答 → 不需要截图（AI 可以随时通过 screenshot action 主动截图）
-        
-        即使判断不截图，AI 在需要时仍可通过 tool_use 主动请求截图，
-        所以这里偏保守（宁可不截也不要每次都截），不会影响功能。
-        """
-        task_lower = task.lower()
-        for keyword in self._SCREEN_ACTION_KEYWORDS:
-            if keyword.lower() in task_lower:
-                agent_log.debug(f"[任务分析] 匹配到关键词 '{keyword}'，需要截图")
-                return True
-        agent_log.debug(f"[任务分析] 未匹配到操控关键词，跳过初始截图")
-        return False
 
     async def run(self, task: str) -> None:
         """启动 Agent 执行循环
@@ -267,24 +253,8 @@ class AgentSession:
         try:
             await self._emit(StepType.TEXT, {"content": f"收到任务：{task}"})
 
-            # 根据任务内容判断是否需要初始截图
-            # 需要操控电脑的任务才截图，纯聊天/问答类不截图
-            needs_screenshot = self._task_needs_screenshot(task)
-            screenshot_b64 = ""
-            
-            if needs_screenshot:
-                self._step_count += 1
-                await self._emit(StepType.SCREENSHOT, {"content": "正在截取屏幕..."})
-                screenshot_b64 = await asyncio.to_thread(self.take_screenshot)
-                await self._emit(StepType.SCREENSHOT, {
-                    "content": "屏幕截图完成",
-                    "screenshot": screenshot_b64,
-                })
-            else:
-                agent_log.info(f"[跳过初始截图] 任务不需要操控屏幕: {task[:80]}")
-
-            # 进入 AI 执行循环（子类实现）
-            await self._run_loop(task, screenshot_b64)
+            # 直接进入 AI 执行循环，让 AI 自行判断是否需要获取控件树或截图
+            await self._run_loop(task)
 
         except asyncio.CancelledError:
             logger.info("Agent 任务被取消")
@@ -299,12 +269,14 @@ class AgentSession:
                 self.state = AgentState.IDLE
                 await self._emit(StepType.COMPLETE, {"content": "任务完成"})
 
-    async def _run_loop(self, task: str, initial_screenshot: str) -> None:
+    async def _run_loop(self, task: str) -> None:
         """AI 执行循环 — 子类必须实现
+
+        AI 自行决定每一步是否需要获取控件树、截图、或直接操作。
+        框架层不强制获取任何上下文信息。
 
         Args:
             task: 用户任务描述
-            initial_screenshot: 初始截图 base64
         """
         raise NotImplementedError("子类必须实现 _run_loop()")
 
@@ -315,11 +287,14 @@ class AgentSession:
             await self._pause_event.wait()
             await self._emit(StepType.RESUMED, {"content": "已恢复执行"})
 
-    async def _execute_and_screenshot(self, req: ActionRequest) -> tuple[ActionResult, str]:
-        """执行动作并截图（Agent 循环中的一步）
+    async def _execute_action(self, req: ActionRequest) -> ActionResult:
+        """执行动作（Agent 循环中的一步）
+        
+        只负责执行操作并返回结果。不自动获取控件树或截图，
+        由 AI 自行决定操作后是否需要获取上下文信息。
 
         Returns:
-            (action_result, screenshot_base64)
+            ActionResult
         """
         # 检查暂停
         await self._check_pause()
@@ -349,22 +324,14 @@ class AgentSession:
             await self._emit(StepType.ERROR, {
                 "content": f"动作执行失败: {result.error}",
             })
-            return result, ""
+            return result
 
         agent_log.debug(f"[动作成功] {action_desc} → 耗时 {_elapsed:.3f}s")
 
         # 等待 UI 动画完成
         await asyncio.sleep(self.POST_ACTION_DELAY)
 
-        # 截图
-        await self._emit(StepType.SCREENSHOT, {"content": "正在截取屏幕..."})
-        screenshot_b64 = await asyncio.to_thread(self.take_screenshot)
-        await self._emit(StepType.SCREENSHOT, {
-            "content": "屏幕截图完成",
-            "screenshot": screenshot_b64,
-        })
-
-        return result, screenshot_b64
+        return result
 
     def _describe_action(self, req: ActionRequest) -> str:
         """生成动作的人类可读描述"""

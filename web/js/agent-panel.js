@@ -124,11 +124,23 @@ function handleAgentMessage(msg) {
             // 收到模型列表
             agentModels = msg.models || [];
             agentCurrentModel = msg.current || '';
+            // 优先从 localStorage 恢复上次用户选择的模型
+            const savedModel = localStorage.getItem('anybot_selected_model');
+            if (savedModel && agentModels.some(m => m.id === savedModel)) {
+                agentCurrentModel = savedModel;
+            }
             renderModelSelect();
+            // 如果本地选择与后端不同，通知后端同步
+            if (agentCurrentModel && agentCurrentModel !== msg.current) {
+                if (agentWs && agentWs.readyState === WebSocket.OPEN) {
+                    agentWs.send(JSON.stringify({ type: 'set_model', model: agentCurrentModel }));
+                }
+            }
             break;
 
         case 'model_changed':
             agentCurrentModel = msg.model;
+            localStorage.setItem('anybot_selected_model', msg.model);
             updateModelSelect();
             appendMessage('system', `已切换模型: ${msg.model_name}`);
             break;
@@ -401,6 +413,9 @@ function updateModelSelect() {
 function onModelChange(modelId) {
     if (!modelId) return;
     agentCurrentModel = modelId;
+    
+    // 保存到 localStorage，下次打开自动选中
+    localStorage.setItem('anybot_selected_model', modelId);
     
     // 通知后端
     if (agentWs && agentWs.readyState === WebSocket.OPEN) {

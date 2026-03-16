@@ -252,8 +252,8 @@ class ActionExecutor:
         - 只做屏幕边界裁剪
         - 不执行 _ensure_window_active（Agent 操控的是整个桌面）
         
-        Agent 截取全屏截图，AI 返回的坐标经过 _scale_coord 后
-        已经是物理屏幕绝对坐标，不需要再叠加窗口偏移。
+        Agent 截取全屏截图，AI 返回的坐标就是物理屏幕绝对坐标，
+        不需要再叠加窗口偏移。
         """
         try:
             logger.debug(f"执行动作(absolute): {req.action.value}")

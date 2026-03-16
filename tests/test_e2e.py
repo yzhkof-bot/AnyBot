@@ -8,7 +8,7 @@ import json
 import base64
 import requests
 
-BASE_URL = "http://localhost:9765"
+BASE_URL = "http://localhost:8080"
 
 
 def test_health():
@@ -122,7 +122,7 @@ def test_websocket_screen():
     """测试 WebSocket 画面流"""
     print("测试 10: WebSocket 画面流")
     import websocket
-    ws = websocket.create_connection("ws://localhost:9765/ws/screen", timeout=5)
+    ws = websocket.create_connection("ws://localhost:8080/ws/screen", timeout=5)
     try:
         frames = 0
         for _ in range(5):

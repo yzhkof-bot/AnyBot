@@ -2,7 +2,7 @@
 """AnyBot Playwright Web 页面测试"""
 from playwright.sync_api import sync_playwright
 
-BASE = "http://localhost:9765"
+BASE = "http://localhost:8080"
 print("\n🤖 AnyBot Playwright 测试\n" + "=" * 50)
 
 with sync_playwright() as p:
